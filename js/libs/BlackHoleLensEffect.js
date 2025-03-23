@@ -92,7 +92,7 @@ export class BlackHoleLensEffect {
             
             // Determine the maximum effect radius based on mass (more tightly constrained)
             // Make the effect grow much more slowly with mass
-            float maxEffectRadius = screenSpaceRadius * (3.0 + blackHoleMass * 0.2);
+            float maxEffectRadius = screenSpaceRadius * (1.0 + blackHoleMass * 0.2);
             
             // Create a feathered mask for the effect
             // 1.0 = full effect, 0.0 = no effect

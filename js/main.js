@@ -624,101 +624,20 @@ class Game {
     // Add shock wave effect when objects are absorbed
     this.createShockWave(position);
     
-    // Create a spiral accretion stream effect
-    const spiralPoints = [];
-    const spiralColors = [];
-    const spiralVertexCount = 600; // Higher count for smoother spiral
-    
-    // Spiral parameters
-    const maxRotations = 4 + Math.random() * 2; // Number of rotations before reaching black hole
-    const initialWidth = 1.5; // Starting width of the stream
-    const finalWidth = 0.2; // Width near the black hole
-    
-    for (let i = 0; i < spiralVertexCount; i++) {
-      // Interpolation factor (0 at start position, 1 at black hole)
-      const t = i / (spiralVertexCount - 1);
-      
-      // Distance along the path
-      const currentDist = distToBH * (1 - t);
-      
-      // Calculate spiral angle - increases as we get closer to black hole
-      const angle = t * maxRotations * Math.PI * 2;
-      
-      // Calculate spiral radius - decreases as we get closer
-      const spiralRadius = initialWidth * (1 - t) + 0.5 * Math.pow(1 - t, 0.5);
-      
-      // Calculate perpendicular vector for the spiral
-      const perpX = -dirToBlackHole.y;
-      const perpY = dirToBlackHole.x;
-      
-      // Create spiral point by adding sin/cos components to the direct path
-      const spiralX = position.x + dirToBlackHole.x * currentDist + 
-                       Math.cos(angle) * perpX * spiralRadius + 
-                       Math.sin(angle) * perpY * spiralRadius;
-      
-      const spiralY = position.y + dirToBlackHole.y * currentDist + 
-                       Math.cos(angle) * perpY * spiralRadius + 
-                       Math.sin(angle) * (-perpX) * spiralRadius;
-      
-      // Add point to array
-      spiralPoints.push(spiralX, spiralY, 0.1);
-      
-      // Color based on temperature - gets hotter as it approaches the black hole
-      const heat = Math.pow(t, 0.8); // Non-linear heating
-      
-      if (heat < 0.3) {
-        // Cooler outer regions - reddish
-        spiralColors.push(0.8, 0.2, 0.1);
-      } else if (heat < 0.7) {
-        // Mid temperature - orange to yellow
-        const orangeFactor = (heat - 0.3) / 0.4;
-        spiralColors.push(
-          0.8 + orangeFactor * 0.2,  // R: 0.8 to 1.0
-          0.2 + orangeFactor * 0.6,  // G: 0.2 to 0.8
-          0.1 + orangeFactor * 0.1   // B: 0.1 to 0.2
-        );
-      } else {
-        // Hottest region near black hole - white hot
-        const whiteFactor = (heat - 0.7) / 0.3;
-        spiralColors.push(
-          1.0,                      // R: 1.0
-          0.8 + whiteFactor * 0.2,  // G: 0.8 to 1.0
-          0.2 + whiteFactor * 0.8   // B: 0.2 to 1.0
-        );
-      }
-    }
-    
-    // Create geometry for the spiral
-    const spiralGeometry = new THREE.BufferGeometry();
-    spiralGeometry.setAttribute('position', new THREE.Float32BufferAttribute(spiralPoints, 3));
-    spiralGeometry.setAttribute('color', new THREE.Float32BufferAttribute(spiralColors, 3));
-    
-    // Create material for the spiral with varying width
-    const spiralMaterial = new THREE.LineBasicMaterial({
-      vertexColors: true,
-      blending: THREE.AdditiveBlending,
-      transparent: true,
-      opacity: 0.8
-    });
-    
-    // Create the line
-    const spiralLine = new THREE.Line(spiralGeometry, spiralMaterial);
-    this.scene.add(spiralLine);
-    
-    // Create accretion disk brightening effect
+    // Create accretion disk brightening effect - much more subtle now
     const flashGeometry = new THREE.RingGeometry(
       this.blackHole.getRadius() * 1.2,
-      this.blackHole.getRadius() * 3,
+      this.blackHole.getRadius() * 2,
       32, 
       2
     );
     
-    // Material that brightens the accretion disk
+    // Material that brightens the accretion disk - with less yellow, more blue/white
     const flashMaterial = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        intensity: { value: 1.0 },
-        color: { value: new THREE.Color(0xFFFFAA) }
+        intensity: { value: 0.2 }, // Significantly reduced intensity
+        color: { value: new THREE.Color(0x8080BB) } // Changed to a subtle blue-gray
       },
       vertexShader: `
         varying vec2 vUv;
@@ -739,15 +658,15 @@ class Game {
           float angle = atan(vUv.y - 0.5, vUv.x - 0.5);
           float dist = distance(vUv, vec2(0.5, 0.5));
           
-          // Create hotspot pattern
-          float hotspot = smoothstep(0.3, 0.0, abs(sin(angle * 2.0 + time * 5.0) * 0.5 + 0.5 - dist));
+          // Create hotspot pattern - reduced spinning speed
+          float hotspot = smoothstep(0.3, 0.0, abs(sin(angle * 1.5 + time * 3.0) * 0.5 + 0.5 - dist));
           
-          // Pulse effect
-          float pulse = (sin(time * 3.0) * 0.5 + 0.5) * 0.7 + 0.3;
+          // Pulse effect - reduced intensity
+          float pulse = (sin(time * 2.0) * 0.3 + 0.7) * 0.5 + 0.3;
           
-          // Apply effects
+          // Apply effects - reduced alpha even further
           vec3 finalColor = color * intensity * hotspot * pulse;
-          float alpha = hotspot * intensity * 0.7 * pulse;
+          float alpha = hotspot * intensity * 0.4 * pulse;
           
           gl_FragColor = vec4(finalColor, alpha);
         }
@@ -764,12 +683,12 @@ class Game {
     this.scene.add(diskFlash);
     
     // Create light spikes coming out of the black hole perpendicular to the accretion disk
-    // These represent relativistic jets often seen in real black holes
-    const jetGeometry = new THREE.ConeGeometry(0.5, distToBH * 0.3, 16, 1, true);
+    // These represent relativistic jets often seen in real black holes - made more subtle
+    const jetGeometry = new THREE.ConeGeometry(0.3, distToBH * 0.2, 16, 1, true);
     const jetMaterial = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        color: { value: new THREE.Color(0x8080FF) }
+        color: { value: new THREE.Color(0x5050AA) } // Less bright blue
       },
       vertexShader: `
         varying vec2 vUv;
@@ -789,8 +708,8 @@ class Game {
         
         void main() {
           float edge = smoothstep(0.0, 0.1, vUv.x) * smoothstep(1.0, 0.9, vUv.x);
-          float pulse = (sin(vDistance * 20.0 - time * 10.0) * 0.5 + 0.5) * 0.5 + 0.5;
-          float alpha = edge * (1.0 - vDistance) * 0.5 * pulse;
+          float pulse = (sin(vDistance * 10.0 - time * 5.0) * 0.3 + 0.7) * 0.5 + 0.5;
+          float alpha = edge * (1.0 - vDistance) * 0.3 * pulse;
           
           gl_FragColor = vec4(color, alpha);
         }
@@ -818,7 +737,6 @@ class Game {
     
     const animateEffect = () => {
       if (!this.isRunning) {
-        this.scene.remove(spiralLine);
         this.scene.remove(diskFlash);
         this.scene.remove(jet1);
         this.scene.remove(jet2);
@@ -830,7 +748,7 @@ class Game {
       // Update shader times
       if (diskFlash.material.uniforms) {
         diskFlash.material.uniforms.time.value = elapsed;
-        diskFlash.material.uniforms.intensity.value = Math.max(0, 1.0 - elapsed * 0.5);
+        diskFlash.material.uniforms.intensity.value = Math.max(0, 0.2 - elapsed * 0.2); // Fade out faster
       }
       
       if (jet1.material.uniforms) {
@@ -838,30 +756,26 @@ class Game {
         jet2.material.uniforms.time.value = elapsed;
       }
       
-      // Fade out spiral
-      spiralMaterial.opacity = Math.max(0, spiralMaterial.opacity - 0.01);
-      
       // Stretch jets over time
-      const jetScaleFactor = 1.0 + elapsed * 0.5;
+      const jetScaleFactor = 1.0 + elapsed * 0.3; // Reduced scaling
       jet1.scale.y = jetScaleFactor;
       jet2.scale.y = jetScaleFactor;
       
       // Thin jets over time
-      const jetWidthFactor = Math.max(0.1, 1.0 - elapsed * 0.3);
+      const jetWidthFactor = Math.max(0.1, 1.0 - elapsed * 0.5); // Thin out faster
       jet1.scale.x = jetWidthFactor;
       jet1.scale.z = jetWidthFactor;
       jet2.scale.x = jetWidthFactor;
       jet2.scale.z = jetWidthFactor;
       
       // Fade out jets
-      jet1.material.opacity = Math.max(0, 1.0 - elapsed * 0.5);
-      jet2.material.opacity = Math.max(0, 1.0 - elapsed * 0.5);
+      jet1.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity and fade quicker
+      jet2.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity and fade quicker
       
-      if (elapsed < 2.0) {
+      if (elapsed < 1.5) { // Shorter duration
         requestAnimationFrame(animateEffect);
       } else {
         // Remove all effects
-        this.scene.remove(spiralLine);
         this.scene.remove(diskFlash);
         this.scene.remove(jet1);
         this.scene.remove(jet2);
@@ -873,17 +787,17 @@ class Game {
   
   // Add a new method for creating the shockwave effect
   createShockWave(position) {
-    // Create shockwave ring geometry
-    const radius = 2;
+    // Create shockwave ring geometry - even smaller now
+    const radius = 1.2;
     const segments = 32;
-    const geometry = new THREE.RingGeometry(radius * 0.8, radius, segments);
+    const geometry = new THREE.RingGeometry(radius * 0.9, radius, segments);
     
-    // Create shockwave material with custom shader
+    // Create shockwave material with custom shader - more subtle
     const material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        color: { value: new THREE.Color(0xFFFFFF) },
-        intensity: { value: 1.0 },
+        color: { value: new THREE.Color(0xDDDDDD) }, // Less bright white
+        intensity: { value: 0.3 }, // Further reduced intensity
         center: { value: new THREE.Vector2(0, 0) }
       },
       vertexShader: `
@@ -903,12 +817,12 @@ class Game {
         varying vec2 vUv;
         
         void main() {
-          // Create a pulse effect
-          float alpha = sin(time * 10.0) * 0.3 + 0.7;
-          alpha *= smoothstep(1.0, 0.7, time); // Fade out over time
+          // Create a pulse effect - more subtle
+          float alpha = sin(time * 8.0) * 0.2 + 0.5;
+          alpha *= smoothstep(1.0, 0.6, time); // Fade out over time
           
-          // Add color variation to make it more energetic
-          vec3 finalColor = mix(color, vec3(1.0, 0.8, 0.5), sin(time * 15.0) * 0.5 + 0.5);
+          // Less color variation
+          vec3 finalColor = mix(color, vec3(1.0, 0.9, 0.8), sin(time * 10.0) * 0.3 + 0.7);
           
           gl_FragColor = vec4(finalColor, alpha * intensity);
         }
@@ -928,10 +842,10 @@ class Game {
     // Add to scene
     this.scene.add(shockwave);
     
-    // Animate the shockwave
+    // Animate the shockwave - shorter and smaller
     const startTime = performance.now();
-    const duration = 1.5; // seconds
-    const maxScale = 15;
+    const duration = 0.6; // Even shorter duration
+    const maxScale = 6; // Smaller max scale
     
     const updateShockwave = () => {
       const elapsedTime = (performance.now() - startTime) / 1000;
@@ -951,9 +865,9 @@ class Game {
       const scale = 1 + easeOutProgress * maxScale;
       shockwave.scale.set(scale, scale, 1);
       
-      // Update shader uniforms
+      // Update shader uniforms - fade faster
       material.uniforms.time.value = progress;
-      material.uniforms.intensity.value = 1 - easeOutProgress; // Fade out as it expands
+      material.uniforms.intensity.value = 0.3 * (1 - easeOutProgress); // Start lower and fade out
       
       // Request next frame
       requestAnimationFrame(updateShockwave);
@@ -1006,7 +920,7 @@ class Game {
         type: type,
         mass: mass,
         color: color,
-        showTrajectory: (i % 5 === 0) // Show trajectory for only some objects to avoid visual clutter
+        showTrajectory: false // Disable all trajectories
       });
       
       // Position randomly but avoid the center where the black hole starts
@@ -1083,11 +997,6 @@ class Game {
       // Add to game
       this.celestialObjects.push(object);
       this.scene.add(object.mesh);
-      
-      // Create trajectory lines for objects
-      if (object.showTrajectory) {
-        object.createTrajectoryLine(this.scene, this.blackHole);
-      }
     }
   }
   
@@ -1381,7 +1290,7 @@ class Game {
         type: type,
         mass: mass,
         color: color,
-        showTrajectory: true
+        showTrajectory: false // Disable all trajectories
       });
       
       // Improved positioning strategy for new objects
@@ -1435,11 +1344,6 @@ class Game {
       // Add to game
       this.celestialObjects.push(object);
       this.scene.add(object.mesh);
-      
-      // Create trajectory lines for objects
-      if (object.showTrajectory) {
-        object.createTrajectoryLine(this.scene, this.blackHole);
-      }
     }
   }
   
@@ -1522,25 +1426,18 @@ class Game {
       console.log("Setting up basic black hole visualization");
       
       // Check if material exists before trying to set opacity
-      if (this.blackHole.mesh.material) {
-        this.blackHole.mesh.material.opacity = 1.0;
-      } else {
-        // Create a material if one doesn't exist
-        this.blackHole.mesh.material = new THREE.MeshBasicMaterial({
-          color: 0x000000,
-          transparent: true,
-          opacity: 1.0
-        });
-        console.log("Created new material for black hole");
+      if (this.blackHole.eventHorizon && this.blackHole.eventHorizon.material) {
+        // Make sure the black hole's event horizon is visible but still partially transparent
+        this.blackHole.eventHorizon.material.opacity = 0.85;
       }
       
       // Create a simple glow effect if it doesn't exist yet
       if (!this.blackHoleGlow) {
         const glowGeometry = new THREE.SphereGeometry(this.blackHole.getRadius() * 3, 32, 32);
         const glowMaterial = new THREE.MeshBasicMaterial({
-          color: 0x330066,
+          color: 0x220044,
           transparent: true,
-          opacity: 0.4,
+          opacity: 0.3,
           side: THREE.BackSide
         });
         
@@ -1550,7 +1447,7 @@ class Game {
         console.log("Added blackhole glow effect");
       }
       
-      // Create accretion disk
+      // Create accretion disk with better shader for lens effect integration
       const diskGeometry = new THREE.RingGeometry(
         this.blackHole.getRadius() * 2.2,
         this.blackHole.getRadius() * 4,
@@ -1558,21 +1455,69 @@ class Game {
         2
       );
       
-      const diskMaterial = new THREE.MeshBasicMaterial({
-        color: 0xff6600,
+      // Use a shader material for better visual integration with lens effect
+      const diskMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          time: { value: 0 },
+          radius: { value: this.blackHole.getRadius() },
+          color: { value: new THREE.Color(0x304060) }, // Subtle blue
+          opacity: { value: 0.4 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float time;
+          uniform float radius;
+          uniform vec3 color;
+          uniform float opacity;
+          
+          varying vec2 vUv;
+          
+          void main() {
+            // Calculate distance from center and angle for disk effect
+            vec2 center = vec2(0.5, 0.5);
+            float dist = distance(vUv, center) * 2.0;
+            float angle = atan(vUv.y - 0.5, vUv.x - 0.5);
+            
+            // Create a feathered inner and outer edge
+            float innerEdge = smoothstep(0.0, 0.3, dist - 0.5);
+            float outerEdge = smoothstep(1.0, 0.7, dist);
+            
+            // Combine edges for disk shape
+            float diskShape = innerEdge * outerEdge;
+            
+            // Add subtle rotation and variation
+            float rotation = sin(angle * 3.0 + time * 0.2) * 0.2 + 0.8;
+            
+            // Apply the final color with feathered edges
+            vec3 finalColor = color * rotation;
+            float alpha = diskShape * opacity;
+            
+            gl_FragColor = vec4(finalColor, alpha);
+          }
+        `,
         transparent: true,
-        opacity: 0.6,
-        side: THREE.DoubleSide
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending
       });
       
       this.accretionDisk = new THREE.Mesh(diskGeometry, diskMaterial);
       this.accretionDisk.position.copy(this.blackHole.position);
       this.accretionDisk.rotation.x = Math.PI / 2;
       this.scene.add(this.accretionDisk);
-      console.log("Added accretion disk");
+      console.log("Added accretion disk with shader material");
       
       // Adding a simple update function for the glow and disk
       this.updateBasicRenderer = (deltaTime) => {
+        const time = performance.now() * 0.001; // Current time in seconds
+        
         if (this.blackHoleGlow) {
           this.blackHoleGlow.position.copy(this.blackHole.position);
           this.blackHoleGlow.scale.set(
@@ -1585,6 +1530,11 @@ class Game {
         if (this.accretionDisk) {
           this.accretionDisk.position.copy(this.blackHole.position);
           this.accretionDisk.rotation.z += deltaTime * 0.2;
+          
+          // Update time in the shader
+          if (this.accretionDisk.material.uniforms) {
+            this.accretionDisk.material.uniforms.time.value = time;
+          }
         }
       };
       

@@ -15,37 +15,80 @@ export class BlackHole {
   }
   
   createMesh() {
-    // For 2D, we use a circle geometry for the black hole
-    const geometry = new THREE.CircleGeometry(this.getRadius(), 64);
+    // Create a group to hold all black hole components
+    this.mesh = new THREE.Group();
     
-    // Use a custom shader material for the black hole
+    // For 2D, we use a circle geometry for the event horizon with larger radius for feathering
+    const geometry = new THREE.CircleGeometry(this.getRadius() * 1.5, 64);
+    
+    // Use a custom shader material for the black hole with proper feathered edges
     const material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
         mass: { value: this.mass },
+        radius: { value: this.getRadius() },
         gravitationalLensingEffect: { value: this.gravitationalLensingEffect }
       },
-      vertexShader: vertexShader,
-      fragmentShader: fragmentShader,
+      vertexShader: `
+        varying vec2 vUv;
+        
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float time;
+        uniform float mass;
+        uniform float radius;
+        uniform float gravitationalLensingEffect;
+        
+        varying vec2 vUv;
+        
+        void main() {
+          // Calculate distance from center (0-1)
+          vec2 center = vec2(0.5, 0.5);
+          float dist = distance(vUv, center) * 2.0;
+          
+          // Create event horizon with soft feathered edge
+          // Core black hole is black, but the edges are semi-transparent
+          vec3 color = vec3(0.0);
+          
+          // Create a softer edge that can be affected by the lens effect
+          // Inner core is solid, then feathers out gradually
+          float coreRadius = 0.6; // Relative to overall radius
+          float featherStart = coreRadius;
+          float featherEnd = 1.0;
+          
+          // Alpha is 1.0 in the core, then fades out to the edge
+          float alpha = 1.0;
+          if (dist > featherStart) {
+            alpha = 1.0 - smoothstep(featherStart, featherEnd, dist);
+          }
+          
+          // Add subtle blue glow at the edge (blue-shifted light)
+          float edgeGlow = smoothstep(featherStart, featherEnd * 0.8, dist) * (1.0 - smoothstep(featherEnd * 0.8, featherEnd, dist));
+          vec3 glowColor = vec3(0.1, 0.2, 0.8); // Blue-shifted
+          color = mix(color, glowColor, edgeGlow * 0.3);
+          
+          // Add time-based variation to the edge for a more dynamic appearance
+          float timePulse = sin(time * 0.5 + dist * 8.0) * 0.05 + 0.95;
+          alpha *= timePulse;
+          
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
       transparent: true,
+      depthWrite: true, // Important for proper transparency
       side: THREE.DoubleSide
     });
     
-    this.mesh = new THREE.Mesh(geometry, material);
-    
-    // Create accretion disk (for 2D, this is a ring)
-    this.createAccretionDisk();
+    this.eventHorizon = new THREE.Mesh(geometry, material);
+    this.mesh.add(this.eventHorizon);
     
     // Create a visual distortion effect
     this.createDistortionField();
-    
-    // Group everything together
-    const group = new THREE.Group();
-    group.add(this.mesh); // Black hole core
-    group.add(this.accretionDisk); // Accretion disk
-    group.add(this.distortionField); // Visual distortion
-    
-    this.mesh = group;
+    this.mesh.add(this.distortionField);
   }
   
   createAccretionDisk() {
@@ -95,7 +138,57 @@ export class BlackHole {
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
-      fragmentShader: distortionFieldFragmentShader,
+      fragmentShader: `
+        uniform float time;
+        uniform float mass;
+        uniform float radius;
+        uniform float distortionStrength;
+        
+        varying vec2 vUv;
+        
+        float getSchwarzschildRadius(float mass) {
+          return mass * 0.1; // Simplified for visual effect
+        }
+        
+        void main() {
+          // Distance from center, normalized
+          vec2 center = vec2(0.5, 0.5);
+          vec2 dir = vUv - center;
+          float dist = length(dir) * 2.0;
+          
+          // Calculate gravitational lensing effect
+          float schwarzschildRadius = getSchwarzschildRadius(mass);
+          float lensingFactor = schwarzschildRadius / max(0.05, dist);
+          
+          // More physically accurate light bending visualization
+          float photonSphereRegion = smoothstep(schwarzschildRadius, schwarzschildRadius * 3.0, dist);
+          photonSphereRegion *= smoothstep(schwarzschildRadius * 4.0, schwarzschildRadius * 1.5, dist);
+          
+          // Visual distortion intensity - stronger close to event horizon
+          float distortionIntensity = lensingFactor * distortionStrength * photonSphereRegion;
+          
+          // Einstein ring effect
+          float einsteinRing = smoothstep(schwarzschildRadius * 1.4, schwarzschildRadius * 1.5, dist);
+          einsteinRing *= smoothstep(schwarzschildRadius * 1.7, schwarzschildRadius * 1.6, dist);
+          einsteinRing *= 1.5; // Enhance the effect
+          
+          // Add subtle pulsation and time variance
+          float timePulse = sin(time * 0.5) * 0.05 + 0.95;
+          float timeVarying = (sin(dist * 20.0 - time * 2.0) * 0.5 + 0.5) * 0.2;
+          
+          // Blue-shifted light visualization
+          vec3 baseColor = vec3(0.1, 0.2, 0.6);
+          
+          // Combine all effects 
+          vec3 color = baseColor * (distortionIntensity + einsteinRing + timeVarying) * timePulse;
+          
+          // Alpha is stronger near the event horizon and fades out at larger distances
+          float alpha = (distortionIntensity + einsteinRing * 0.5) * 0.4;
+          alpha *= smoothstep(1.0, 0.1, dist); // Fade out with distance
+          
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -103,7 +196,7 @@ export class BlackHole {
     });
     
     this.distortionField = new THREE.Mesh(distortionGeometry, distortionMaterial);
-    this.distortionField.position.z = -0.1; // Slightly behind the black hole
+    this.distortionField.position.z = -0.01; // Keep the distortion field behind the event horizon
   }
   
   getRadius() {
@@ -158,17 +251,12 @@ export class BlackHole {
         this.mesh.children[0].material.uniforms.mass.value = this.mass;
       }
       
-      // Update accretion disk
+      // Update distortion field
       if (this.mesh.children[1] && this.mesh.children[1].material && this.mesh.children[1].material.uniforms) {
         this.mesh.children[1].material.uniforms.mass.value = this.mass;
-      }
-      
-      // Update distortion field
-      if (this.mesh.children[2] && this.mesh.children[2].material && this.mesh.children[2].material.uniforms) {
-        this.mesh.children[2].material.uniforms.mass.value = this.mass;
         
-        if (this.mesh.children[2].material.uniforms.distortionStrength) {
-          this.mesh.children[2].material.uniforms.distortionStrength.value = 0.2 + (this.mass - 1) * 0.05; // Increase with mass
+        if (this.mesh.children[1].material.uniforms.distortionStrength) {
+          this.mesh.children[1].material.uniforms.distortionStrength.value = 0.2 + (this.mass - 1) * 0.05; // Increase with mass
         }
       }
     }
@@ -179,40 +267,35 @@ export class BlackHole {
   updateVisuals() {
     // Update black hole radius
     const newRadius = this.getRadius();
-    const blackHoleMesh = this.mesh.children[0];
     
-    // Scale the black hole
-    blackHoleMesh.scale.set(1, 1, 1);
-    
-    // Create new geometry with updated radius
-    blackHoleMesh.geometry.dispose(); // Clean up the old geometry
-    blackHoleMesh.geometry = new THREE.CircleGeometry(newRadius, 64);
-    
-    // Update accretion disk
-    const diskRadius = newRadius * 3;
-    const accretionDisk = this.mesh.children[1];
-    
-    // Create new geometry for accretion disk
-    accretionDisk.geometry.dispose();
-    accretionDisk.geometry = new THREE.RingGeometry(
-      newRadius * 1.2, 
-      diskRadius, 
-      64, 
-      8
-    );
+    // Update event horizon
+    if (this.eventHorizon) {
+      // Scale the black hole
+      this.eventHorizon.scale.set(1, 1, 1);
+      
+      // Create new geometry with updated radius
+      this.eventHorizon.geometry.dispose(); // Clean up the old geometry
+      this.eventHorizon.geometry = new THREE.CircleGeometry(newRadius * 1.5, 64);
+      
+      // Update the shader uniforms
+      if (this.eventHorizon.material.uniforms) {
+        this.eventHorizon.material.uniforms.radius.value = newRadius;
+      }
+    }
     
     // Update the distortion field
-    const distortionField = this.mesh.children[2];
-    const distortionRadius = newRadius * 6;
-    
-    // Create new geometry for distortion field
-    distortionField.geometry.dispose();
-    distortionField.geometry = new THREE.CircleGeometry(distortionRadius, 64);
-    
-    // Update uniforms
-    if (distortionField.material.uniforms) {
-      distortionField.material.uniforms.radius.value = newRadius;
-      distortionField.material.uniforms.distortionStrength.value = 0.2 + (this.mass - 1) * 0.05; // Increase with mass
+    if (this.distortionField) {
+      const distortionRadius = newRadius * 6;
+      
+      // Create new geometry for distortion field
+      this.distortionField.geometry.dispose();
+      this.distortionField.geometry = new THREE.CircleGeometry(distortionRadius, 64);
+      
+      // Update uniforms
+      if (this.distortionField.material.uniforms) {
+        this.distortionField.material.uniforms.radius.value = newRadius;
+        this.distortionField.material.uniforms.distortionStrength.value = 0.2 + (this.mass - 1) * 0.05; // Increase with mass
+      }
     }
     
     // Update shader time uniforms for animations
@@ -223,19 +306,14 @@ export class BlackHole {
   updateShaderTimeUniforms() {
     const time = performance.now() * 0.001; // Get current time in seconds
 
-    // Update black hole core shader time
-    if (this.mesh.children[0] && this.mesh.children[0].material && this.mesh.children[0].material.uniforms) {
-      this.mesh.children[0].material.uniforms.time.value = time;
-    }
-    
-    // Update accretion disk shader time
-    if (this.mesh.children[1] && this.mesh.children[1].material && this.mesh.children[1].material.uniforms) {
-      this.mesh.children[1].material.uniforms.time.value = time;
+    // Update event horizon shader time
+    if (this.eventHorizon && this.eventHorizon.material && this.eventHorizon.material.uniforms) {
+      this.eventHorizon.material.uniforms.time.value = time;
     }
     
     // Update distortion field shader time
-    if (this.mesh.children[2] && this.mesh.children[2].material && this.mesh.children[2].material.uniforms) {
-      this.mesh.children[2].material.uniforms.time.value = time;
+    if (this.distortionField && this.distortionField.material && this.distortionField.material.uniforms) {
+      this.distortionField.material.uniforms.time.value = time;
     }
   }
   
@@ -290,6 +368,9 @@ export class BlackHole {
         }
       }
     }
+    
+    // Set black hole position
+    this.mesh.position.z = 0; // Set to appropriate z-depth
   }
   
   // Get screen position for lens effect

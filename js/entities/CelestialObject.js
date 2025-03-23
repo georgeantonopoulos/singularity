@@ -15,7 +15,7 @@ export class CelestialObject {
     this.position = new THREE.Vector3(0, 0, 0);
     this.velocity = options.velocity || new THREE.Vector3(0, 0, 0);
     this.color = options.color || new THREE.Color(0xffffff);
-    this.showTrajectory = options.showTrajectory !== undefined ? options.showTrajectory : false;
+    this.showTrajectory = false; // Trajectories always disabled
     
     this.createMesh();
   }
@@ -48,34 +48,11 @@ export class CelestialObject {
       const b = Math.floor(this.color.b * 255);
       
       // Create bright white center fading to the star's color
-      gradient.addColorStop(0, `rgba(255, 255, 255, 1)`);  // Bright white center
-      gradient.addColorStop(0.2, `rgba(${r + 80}, ${g + 80}, ${b + 80}, 1)`); // Lighter color
-      gradient.addColorStop(0.6, `rgba(${r}, ${g}, ${b}, 1)`);  // Original color
+      gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);  // Original color
       gradient.addColorStop(1, `rgba(${r/2}, ${g/2}, ${b/2}, 0.1)`);  // Darker edge
       
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      // Add some noise/flares
-      ctx.globalCompositeOperation = 'screen';
-      
-      for (let i = 0; i < 6; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const length = canvas.width/2 * (0.4 + Math.random() * 0.3);
-        const width = 5 + Math.random() * 15;
-        
-        ctx.save();
-        ctx.translate(canvas.width/2, canvas.height/2);
-        ctx.rotate(angle);
-        
-        const flareGradient = ctx.createLinearGradient(0, 0, length, 0);
-        flareGradient.addColorStop(0, `rgba(255, 255, 255, 0.8)`);
-        flareGradient.addColorStop(1, `rgba(255, 255, 255, 0)`);
-        
-        ctx.fillStyle = flareGradient;
-        ctx.fillRect(0, -width/2, length, width);
-        ctx.restore();
-      }
       
       // Create texture from canvas
       const texture = new THREE.CanvasTexture(canvas);

@@ -22,25 +22,8 @@ export const fragmentShader = `
     vec2 center = vec2(0.5, 0.5);
     float dist = distance(vUv, center) * 2.0;
     
-    // Black hole is totally black in the center
+    // Black hole is totally black in the center and at the edge
     vec3 color = vec3(0.0);
-    
-    // Create an event horizon glow effect
-    float glow = smoothstep(1.0, 0.6, dist);
-    glow = pow(glow, 2.0) * 0.25;
-    
-    // Pulsating effect based on time
-    float pulse = (sin(time * 0.5) * 0.1 + 0.9) * glow;
-    
-    // Event horizon blueish glow
-    vec3 glowColor = mix(
-      vec3(0.1, 0.2, 0.8),  // Outer glow (blue)
-      vec3(0.6, 0.4, 1.0),  // Inner glow (purple)
-      glow
-    );
-    
-    // Apply glow and pulsation
-    color = mix(color, glowColor, pulse);
     
     // Alpha is 1.0 for the black hole, fade out at edges
     float alpha = smoothstep(1.0, 0.9, dist);
