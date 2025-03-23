@@ -21,28 +21,32 @@ export class BlackHoleLensEffect {
     try {
       console.log("Initializing post processing for lens effect");
       
-      // Create a new composer - use the imported EffectComposer directly
+      // Create composer for post-processing
       this.composer = new EffectComposer(this.renderer);
-      console.log("EffectComposer created successfully");
       
-      // Add the standard scene render pass first
+      // First pass renders the scene
       const renderPass = new RenderPass(this.scene, this.camera);
       this.composer.addPass(renderPass);
-      console.log("RenderPass added to composer");
       
-      // Create a noise texture for more interesting visuals
+      // Create noise texture for more detailed distortion
       const noiseTexture = this.createNoiseTexture();
-      console.log("Noise texture created for lens effect");
       
-      // Create our lens shader pass with full gravitational lensing implementation
+      // Get black hole properties
+      const screenPosition = this.blackHole.getScreenPosition(this.camera);
+      const radius = this.blackHole.getRadius() * 2.0; // Use double the radius for visual effect
+      
+      // Create custom shader pass for the gravitational lensing effect
       this.lensPass = new ShaderPass({
         uniforms: {
           tDiffuse: { value: null },
-          tNoise: { value: noiseTexture },
-          blackHolePosition: { value: new THREE.Vector2(0.5, 0.5) },
-          blackHoleMass: { value: 1.0 },
-          schwarzschildRadius: { value: 0.1 },
+          blackHolePosition: { value: new THREE.Vector2(
+            screenPosition.x / window.innerWidth,
+            1.0 - (screenPosition.y / window.innerHeight) // Flip Y for WebGL
+          )},
+          blackHoleMass: { value: this.blackHole.mass },
+          schwarzschildRadius: { value: this.blackHole.getRadius() },
           screenRatio: { value: window.innerWidth / window.innerHeight },
+          noiseTexture: { value: noiseTexture },
           time: { value: 0.0 },
           intensity: { value: 1.0 }
         },
@@ -55,146 +59,123 @@ export class BlackHoleLensEffect {
           }
         `,
         fragmentShader: `
-          uniform sampler2D tDiffuse; // The rendered scene texture
-          uniform sampler2D tNoise; // Noise texture for additional effects
-          uniform vec2 blackHolePosition; // Position of black hole in normalized coordinates (0-1)
-          uniform float blackHoleMass; // Mass of the black hole
-          uniform float schwarzschildRadius; // Schwarzschild radius
-          uniform float screenRatio; // Width/height ratio to handle non-square screens
-          uniform float time; // For animation effects
-          uniform float intensity; // Overall effect intensity
+          uniform sampler2D tDiffuse;
+          uniform sampler2D noiseTexture;
+          uniform vec2 blackHolePosition;
+          uniform float blackHoleMass;
+          uniform float schwarzschildRadius;
+          uniform float screenRatio;
+          uniform float time;
+          uniform float intensity;
           
           varying vec2 vUv;
           
-          // Improved noise function for subtle background variations
-          float noise(vec2 p) {
-            return texture2D(tNoise, p * 0.01 + vec2(sin(time*0.1), cos(time*0.1))).r;
-          }
+          // Constants for physical simulation
+          const float c = 1.0; // Speed of light (normalized)
+          const float G = 1.0; // Gravitational constant (normalized)
           
           void main() {
-            // Current pixel coordinate (normalized 0-1)
+            // Correct aspect ratio distortion
             vec2 uv = vUv;
+            vec2 center = blackHolePosition;
             
-            // Calculate vector from current pixel to black hole
-            vec2 direction = blackHolePosition - uv;
+            // Calculate distance from black hole center, correcting for aspect ratio
+            vec2 pos = uv - center;
+            pos.x *= screenRatio;
+            float dist = length(pos);
             
-            // Correct for screen aspect ratio
-            direction.x *= screenRatio;
+            // Calculate the Schwarzschild radius (proportional to mass)
+            float rs = 2.0 * G * blackHoleMass / (c * c);
             
-            // Distance from pixel to black hole
-            float distance = length(direction);
+            // Scale the event horizon radius for better visualization
+            float visualRadius = schwarzschildRadius * 0.5;
             
-            // Normalize the direction vector for later use
-            vec2 normalizedDirection = normalize(direction);
-            
-            // Calculate Schwarzschild radius in screen space with better scaling
-            float screenSpaceRadius = schwarzschildRadius * 0.03 * (1.0 + blackHoleMass * 0.02); 
-            
-            // Determine the maximum effect radius based on mass (more tightly constrained)
-            // Make the effect grow much more slowly with mass
-            float maxEffectRadius = screenSpaceRadius * (1.0 + blackHoleMass * 0.2);
-            
-            // Create a feathered mask for the effect
-            // 1.0 = full effect, 0.0 = no effect
-            float featherStart = maxEffectRadius * 0.7; // Start closer to the black hole
-            float featherEnd = maxEffectRadius;
-            float effectMask = 1.0 - smoothstep(featherStart, featherEnd, distance);
-            
-            // Default to unmodified scene for pixels outside effect radius
-            if (effectMask <= 0.001) {
-              gl_FragColor = texture2D(tDiffuse, vUv);
+            // Inside event horizon - pure black
+            if (dist < visualRadius * 0.8) {
+              gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
               return;
             }
             
-            // Calculate physically-based gravitational lensing effect
-            float deflectionStrength;
+            // Create a physically-based lensing effect
+            // Light bending becomes stronger closer to the black hole
+            // Based on gravitational lensing equation: θ = 4GM/bc²
+            // where b is the impact parameter (distance from center)
             
-            if (distance < screenSpaceRadius * 1.5) {
-              // Inside event horizon - complete black with slight glow
-              float edgeFactor = smoothstep(0.0, screenSpaceRadius * 1.5, distance);
-              vec3 edgeColor = mix(vec3(0.0), vec3(0.3, 0.1, 0.5), edgeFactor);
-              gl_FragColor = vec4(edgeColor * 0.2, 1.0);
+            // Calculate deflection factor based on distance
+            float deflectionFactor;
+            if (dist < visualRadius) {
+              // Transitional zone: smooth gradient to black
+              deflectionFactor = 0.0;
+              float fade = smoothstep(visualRadius * 0.8, visualRadius, dist);
+              gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0 - fade);
               return;
-            } else {
-              // Realistic lensing equation approximation
-              // Using a modified version of Einstein's gravitational lensing equation
-              deflectionStrength = screenSpaceRadius * blackHoleMass / (distance * distance);
-              deflectionStrength = min(deflectionStrength, 0.1); // Reduce maximum distortion
+            } else if (dist < visualRadius * 2.5) {
+              // Gravitational lensing zone - limited to a smaller radius around the black hole
+              // Higher power for more dramatic effect near the event horizon
+              deflectionFactor = intensity * pow(visualRadius / dist, 1.8) * 1.5;
               
-              // Enhance effect near the event horizon for more dramatic visuals
-              // But make it drop off more quickly with distance
-              float edgeFactor = screenSpaceRadius / max(distance - screenSpaceRadius, 0.001);
-              edgeFactor = pow(edgeFactor, 1.5); // Steeper falloff
-              deflectionStrength *= 1.0 + 3.0 * edgeFactor * intensity;
+              // Taper off effect at the outer edge
+              deflectionFactor *= smoothstep(visualRadius * 2.5, visualRadius, dist);
+            } else {
+              // Outside the lensing effect zone
+              gl_FragColor = texture2D(tDiffuse, uv);
+              return;
             }
             
-            // Apply the feathered mask to the deflection strength
-            deflectionStrength *= effectMask;
+            // Add subtle time-based ripples with longer wavelength
+            // Use slower and longer wavelength for less noisy, more elegant ripples
+            float timeRipple = sin(dist * 10.0 - time * 0.8) * 0.05;
+            deflectionFactor *= (1.0 + timeRipple);
             
-            // Calculate the UV offset based on the deflection
-            vec2 offset = normalizedDirection * deflectionStrength;
+            // Create Einstein ring effect - intensify at certain radius
+            float ringFactor = smoothstep(visualRadius, visualRadius * 1.1, dist) 
+                             * smoothstep(visualRadius * 1.6, visualRadius * 1.1, dist);
             
-            // Add time-varying warp for a more dynamic effect (but keep it small)
-            float animatedWarp = sin(time * 0.5 + distance * 20.0) * 0.0003;
-            offset += normalizedDirection * animatedWarp * (1.0 + blackHoleMass * 0.05) * effectMask;
+            // Direction from pixel to black hole center
+            vec2 dir = normalize(pos);
             
-            // Apply chromatic aberration near the black hole (light splitting into colors)
-            vec2 redOffset = offset * 0.98;
-            vec2 blueOffset = offset * 1.02;
+            // Apply distortion: redirect rays toward the black hole center
+            // The closer to the black hole, the stronger the bending
+            vec2 offset = dir * deflectionFactor;
             
-            // Sample the texture with distorted coordinates for each color channel
-            vec2 distortedUV = uv - offset;
-            vec2 distortedUV_red = uv - redOffset;
-            vec2 distortedUV_blue = uv - blueOffset;
+            // Enhanced distortion near Einstein ring
+            offset += dir * ringFactor * deflectionFactor * 0.5;
             
-            // Clamp UV coordinates to prevent edge artifacts
-            distortedUV = clamp(distortedUV, 0.0, 1.0);
-            distortedUV_red = clamp(distortedUV_red, 0.0, 1.0);
-            distortedUV_blue = clamp(distortedUV_blue, 0.0, 1.0);
+            // Sample the scene texture with the distorted coordinates
+            vec2 distortedUv = uv - offset;
             
-            // Get base color with chromatic aberration
-            vec4 baseColor = texture2D(tDiffuse, distortedUV);
-            float red = texture2D(tDiffuse, distortedUV_red).r;
-            float blue = texture2D(tDiffuse, distortedUV_blue).b;
+            // Get the distorted color
+            vec4 color = texture2D(tDiffuse, distortedUv);
             
-            // Create the color with chromatic aberration
-            vec4 color = vec4(red, baseColor.g, blue, baseColor.a);
+            // Add subtle blue shift for closer areas (gravitational blueshift effect)
+            if (dist < visualRadius * 2.0) {
+              float blueShift = 1.0 - smoothstep(visualRadius, visualRadius * 2.0, dist);
+              color.b = mix(color.b, color.b * 1.2, blueShift * 0.3);
+              color.r = mix(color.r, color.r * 0.9, blueShift * 0.2);
+            }
             
-            // Apply blue/red shift effects based on distance (gravitational redshift)
-            float blueshift = screenSpaceRadius / max(distance - screenSpaceRadius, 0.001) * 0.1;
-            color.rgb = mix(color.rgb, color.rgb * vec3(0.8, 0.9, 1.3), blueshift * effectMask);
+            // Brighten the Einstein ring more noticeably
+            color.rgb += vec3(0.15, 0.15, 0.35) * ringFactor * intensity * 0.5;
             
-            // Create Einstein ring effect - a bright ring around the black hole
-            // Make the ring smaller and closer to the black hole
-            float einsteinRingDistance = screenSpaceRadius * 1.8;
-            float ringWidth = screenSpaceRadius * 0.2;
-            float ringIntensity = smoothstep(einsteinRingDistance - ringWidth, einsteinRingDistance, distance) * 
-                                 smoothstep(einsteinRingDistance + ringWidth, einsteinRingDistance, distance);
-            
-            // Create more vibrant, gold-colored Einstein ring
-            color.rgb += vec3(1.0, 0.8, 0.4) * ringIntensity * 0.5 * intensity * effectMask;
-            
-            // Final color
             gl_FragColor = color;
           }
         `
       });
       
-      console.log("Lens pass created with gravitational lensing shader");
-      
-      // This makes it the final pass in the chain
+      // Ensure lens pass runs after scene rendering
       this.lensPass.renderToScreen = true;
       this.composer.addPass(this.lensPass);
-      console.log("Lens pass added to composer");
       
-      // Set size of composer to match renderer
-      this.composer.setSize(window.innerWidth, window.innerHeight);
+      // Set up window resize listener
+      window.addEventListener('resize', () => this.onResize());
+      
+      // Set effect as active 
+      this.fallbackActive = false;
       
       console.log("Gravitational lens effect initialized successfully");
     } catch (error) {
-      console.error("Could not initialize post-processing:", error);
-      console.error("Specific error details:", error.message);
-      console.error("Stack trace:", error.stack);
+      console.error("Failed to initialize post-processing:", error);
+      // Set fallback flag to true
       this.fallbackActive = true;
     }
   }

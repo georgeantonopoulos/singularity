@@ -219,13 +219,10 @@ class Game {
         this.composer = this.lensEffect.composer;
         console.log("Post-processing lens effect initialized successfully");
       } else {
-        console.warn("Could not initialize post-processing lens effect, using fallback visuals");
-        this.setupBasicRenderer();
+        console.warn("Failed to create lens effect composer");
       }
     } catch (error) {
-      console.error("Error initializing lens effect:", error);
-      // Lens effect initialization failed, use the fallback
-      this.setupBasicRenderer();
+      console.error("Failed to set up lens effect:", error);
     }
   }
   
@@ -578,14 +575,15 @@ class Game {
     }
     
     this.blackHole = new BlackHole({
-      initialMass: 1,
+      initialMass: 0.3, // Start with even smaller mass (was 0.5)
       eventHorizonVisuals: true,
       gravitationalLensingEffect: 0.5,
       camera: this.camera  // Pass the camera reference to the black hole
     });
     
     this.blackHole.onObjectAbsorbed = (object) => {
-      this.blackHole.increaseMass(object.mass * 0.2); // Add 20% of object's mass
+      // Note: The actual mass increase now happens in the BlackHole.animateObjectAbsorption method
+      // This is just for visual effects and UI updates
       this.updateVisualEffects();
       this.updateScoreAndUI();
       
@@ -598,7 +596,7 @@ class Game {
     this.blackHole.mesh.position.copy(this.blackHole.position);
     
     // Ensure black hole is visible with proper 3D appearance
-    this.blackHole.mesh.scale.set(3, 3, 3); // Make it bigger
+    this.blackHole.mesh.scale.set(0.7, 0.7, 0.7); // Start much smaller (was 1,1,1)
     
     // Add the black hole to the scene
     this.scene.add(this.blackHole.mesh);
@@ -1384,10 +1382,18 @@ class Game {
     
     // CRITICAL: Simplified rendering logic to ensure we see something
     try {
-      // Check if we can use the lens effect or composer
-      if (this.lensEffect && !this.lensEffect.fallbackActive) {
+      // Update lens effect with the latest black hole properties if available
+      if (this.blackHole && this.lensEffect && !this.lensEffect.fallbackActive) {
+        // Get the black hole's screen position and other properties
+        const props = this.blackHole.getLensEffectProperties();
+        
+        // Update the lens effect with the latest black hole properties
+        this.lensEffect.update(props.screenPosition, props.mass, this.camera);
+        
+        // Let lens effect handle rendering with post-processing
         this.lensEffect.render();
       } else if (this.composer && typeof this.composer.render === 'function') {
+        // Use composer directly if lens effect not available
         this.composer.render();
       } else {
         // Use standard renderer as fallback
