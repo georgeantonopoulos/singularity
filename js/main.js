@@ -59,6 +59,16 @@ class Game {
     this.gameWidth = 100;
     this.gameHeight = 60;
     
+    // Camera animation properties
+    this.cameraAnimationActive = false;
+    this.cameraTargetPosition = new THREE.Vector3(0, 0, 0);
+    this.cameraOriginalPosition = new THREE.Vector3(0, 0, 0);
+    this.cameraAnimationStartTime = 0;
+    this.cameraAnimationDuration = 2.5; // seconds
+    this.cameraSizeThresholdTriggered = false;
+    this.cameraSizeThresholdTimestamp = 0;
+    this.cameraSizeThresholdDelay = 3; // seconds
+    
     // Initialize the game
     this.setupEventListeners();
     this.initThree();
@@ -150,6 +160,164 @@ class Game {
         this.blackHole.mesh.position.copy(this.blackHole.position);
       }
     }
+    
+    // Check if black hole has grown too large and needs camera adjustment
+    this.checkBlackHoleSizeForCameraAdjustment();
+  }
+  
+  // New method to check black hole size and trigger camera animation if needed
+  checkBlackHoleSizeForCameraAdjustment() {
+    if (!this.blackHole || !this.camera) return;
+    
+    // Get the current black hole radius
+    const blackHoleRadius = this.blackHole.getRadius();
+    
+    // Compare to half the screen size (use the smaller dimension)
+    const screenThreshold = Math.min(this.gameWidth, this.gameHeight) / 2;
+    
+    if (blackHoleRadius > screenThreshold * 0.5) {
+      // Black hole is getting too large
+      if (!this.cameraSizeThresholdTriggered && !this.cameraAnimationActive) {
+        // Start the delay timer
+        this.cameraSizeThresholdTriggered = true;
+        this.cameraSizeThresholdTimestamp = performance.now() / 1000;
+        console.log("Black hole size threshold reached, waiting for delay before camera animation");
+      } else if (!this.cameraAnimationActive) {
+        // Check if delay has passed
+        const currentTime = performance.now() / 1000;
+        const elapsedDelay = currentTime - this.cameraSizeThresholdTimestamp;
+        
+        if (elapsedDelay >= this.cameraSizeThresholdDelay) {
+          // Start camera animation
+          this.startCameraAnimation();
+        }
+      }
+    } else if (blackHoleRadius < screenThreshold * 0.25 && this.camera.position.z > 90) {
+      // Black hole has become small enough and camera is still zoomed out
+      // Reset camera position (with animation)
+      if (!this.cameraAnimationActive) {
+        this.resetCameraPosition();
+      }
+      
+      // Reset threshold flag
+      this.cameraSizeThresholdTriggered = false;
+    } else {
+      // Reset threshold flag when size is normal
+      this.cameraSizeThresholdTriggered = false;
+    }
+  }
+  
+  // New method to reset camera position
+  resetCameraPosition() {
+    if (this.cameraAnimationActive) return;
+    
+    console.log("Resetting camera position");
+    
+    // Store current camera position
+    this.cameraOriginalPosition.copy(this.camera.position);
+    
+    // Target the initial camera position
+    this.cameraTargetPosition.set(0, 0, 80);
+    
+    // Set animation parameters
+    this.cameraAnimationActive = true;
+    this.cameraAnimationStartTime = performance.now() / 1000;
+    this.cameraAnimationDuration = 3.0; // Slightly longer duration for reset
+  }
+  
+  // New method to start camera animation
+  startCameraAnimation() {
+    if (this.cameraAnimationActive) return;
+    
+    console.log("Starting camera animation to zoom out");
+    
+    // Store current camera position
+    this.cameraOriginalPosition.copy(this.camera.position);
+    
+    // Calculate target position (move camera up/back to see more)
+    // Make the camera movement proportional to the black hole size
+    const blackHoleRadius = this.blackHole.getRadius();
+    const screenThreshold = Math.min(this.gameWidth, this.gameHeight) / 2;
+    const sizeFactor = blackHoleRadius / screenThreshold;
+    
+    // Calculate how much to move the camera based on black hole size
+    // Larger black holes need more camera movement
+    const zOffset = this.gameHeight * 0.5 * Math.max(1, sizeFactor);
+    
+    this.cameraTargetPosition.set(
+      this.camera.position.x,
+      this.camera.position.y,
+      this.camera.position.z + zOffset
+    );
+    
+    console.log(`Camera moving from z=${this.camera.position.z} to z=${this.cameraTargetPosition.z}`);
+    
+    // Set animation parameters
+    this.cameraAnimationActive = true;
+    this.cameraAnimationStartTime = performance.now() / 1000;
+    
+    // Reset threshold trigger
+    this.cameraSizeThresholdTriggered = false;
+  }
+  
+  // New method to update camera animation
+  updateCameraAnimation(deltaTime) {
+    if (!this.cameraAnimationActive) return;
+    
+    const currentTime = performance.now() / 1000;
+    const elapsedTime = currentTime - this.cameraAnimationStartTime;
+    
+    if (elapsedTime >= this.cameraAnimationDuration) {
+      // Animation complete
+      this.camera.position.copy(this.cameraTargetPosition);
+      this.cameraAnimationActive = false;
+      console.log("Camera animation completed");
+      return;
+    }
+    
+    // Calculate progress (0 to 1) with easing
+    const progress = elapsedTime / this.cameraAnimationDuration;
+    const easedProgress = this.easeOutQuad(progress);
+    
+    // Interpolate camera position
+    this.camera.position.lerpVectors(
+      this.cameraOriginalPosition,
+      this.cameraTargetPosition,
+      easedProgress
+    );
+    
+    // Update orthographic camera projection
+    this.updateOrthographicCamera();
+  }
+  
+  // Helper method for easing animation
+  easeOutQuad(t) {
+    return t * (2 - t);
+  }
+  
+  // Update orthographic camera projection to match new position
+  updateOrthographicCamera() {
+    if (!this.camera) return;
+    
+    // Adjust the orthographic camera size based on z-position
+    // Start with the original camera frustum size
+    const aspectRatio = window.innerWidth / window.innerHeight;
+    const baseSize = 60 / 2; // Half the frustum size
+    
+    // Calculate a zoom factor based on camera z position (starting from z=80)
+    // This ensures the camera zooms out as it moves back
+    const zoomFactor = this.camera.position.z / 80;
+    
+    // Apply the zoom factor to the camera frustum
+    const newSize = baseSize * zoomFactor;
+    
+    // Update the camera frustum
+    this.camera.left = -newSize * aspectRatio;
+    this.camera.right = newSize * aspectRatio;
+    this.camera.top = newSize;
+    this.camera.bottom = -newSize;
+    
+    this.camera.updateProjectionMatrix();
   }
 
   initThree() {
@@ -168,7 +336,8 @@ class Game {
       0.1,
       1000
     );
-    this.camera.position.z = 100;
+    // Start camera a bit closer to allow room for zooming out
+    this.camera.position.z = 80;
     this.camera.lookAt(0, 0, 0);
     
     // Create renderer
@@ -1036,6 +1205,9 @@ class Game {
   update(deltaTime) {
     // Update black hole position based on mouse
     this.updateBlackHolePosition();
+    
+    // Update camera animation if active
+    this.updateCameraAnimation(deltaTime);
     
     // If we're using the basic renderer, update it
     if (this.basicRendererActive && this.updateBasicRenderer) {
