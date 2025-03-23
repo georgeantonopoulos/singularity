@@ -1,0 +1,25 @@
+{
+  "name": "christophers-game",
+  "version": "1.0.0",
+  "description": "Black hole cosmic feast game with gravitational lensing effects",
+  "main": "js/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "serve ."
+  },
+  "keywords": [
+    "game",
+    "three.js",
+    "black hole",
+    "space",
+    "physics"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "three": "^0.159.0"
+  },
+  "devDependencies": {
+    "serve": "^14.2.1"
+  }
+} 
