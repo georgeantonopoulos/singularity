@@ -571,6 +571,12 @@ class Game {
       this.blackHole = null;
     }
     
+    // If there's an existing glow effect, remove it
+    if (this.blackHoleGlow) {
+      this.scene.remove(this.blackHoleGlow);
+      this.blackHoleGlow = null;
+    }
+    
     this.blackHole = new BlackHole({
       initialMass: 1,
       eventHorizonVisuals: true,
@@ -591,21 +597,10 @@ class Game {
     this.blackHole.position = new THREE.Vector3(0, 0, 0);
     this.blackHole.mesh.position.copy(this.blackHole.position);
     
-    // Ensure black hole is visible - increase scale
+    // Ensure black hole is visible with proper 3D appearance
     this.blackHole.mesh.scale.set(3, 3, 3); // Make it bigger
     
-    // Add a glow effect to make it visible without post-processing
-    const glowGeometry = new THREE.SphereGeometry(this.blackHole.getRadius() * 2, 32, 32);
-    const glowMaterial = new THREE.MeshBasicMaterial({
-      color: 0x330033,
-      transparent: true,
-      opacity: 0.6
-    });
-    
-    this.blackHoleGlow = new THREE.Mesh(glowGeometry, glowMaterial);
-    this.blackHoleGlow.position.copy(this.blackHole.position);
-    this.scene.add(this.blackHoleGlow);
-    
+    // Add the black hole to the scene
     this.scene.add(this.blackHole.mesh);
     
     // Set up lens effect - this is now using a fallback renderer

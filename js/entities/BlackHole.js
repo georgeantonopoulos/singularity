@@ -18,8 +18,8 @@ export class BlackHole {
     // Create a group to hold all black hole components
     this.mesh = new THREE.Group();
     
-    // For 2D, we use a circle geometry for the event horizon with larger radius for feathering
-    const geometry = new THREE.CircleGeometry(this.getRadius() * 1.5, 64);
+    // For 3D, use a sphere geometry for the event horizon for depth effects
+    const geometry = new THREE.SphereGeometry(this.getRadius() * 1.5, 64, 32);
     
     // Use a custom shader material for the black hole with proper feathered edges
     const material = new THREE.ShaderMaterial({
@@ -31,10 +31,19 @@ export class BlackHole {
       },
       vertexShader: `
         varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+        varying float vDepth;
         
         void main() {
           vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vNormal = normalize(normalMatrix * normal);
+          vPosition = position;
+          
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          vDepth = -mvPosition.z;
+          
+          gl_Position = projectionMatrix * mvPosition;
         }
       `,
       fragmentShader: `
@@ -44,61 +53,71 @@ export class BlackHole {
         uniform float gravitationalLensingEffect;
         
         varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+        varying float vDepth;
         
         void main() {
-          // Calculate distance from center (0-1)
+          // Use the normal and depth for 3D shading
+          vec3 lightDir = normalize(vec3(1.0, 1.0, 2.0));
+          float diffuse = max(0.0, dot(vNormal, lightDir));
+          
+          // Calculate distance from center for radial effects
           vec2 center = vec2(0.5, 0.5);
           float dist = distance(vUv, center) * 2.0;
           
-          // Create event horizon with soft feathered edge
-          // Core black hole is black, but the edges are semi-transparent
-          vec3 color = vec3(0.0);
+          // Create a true sphere appearance by using normal.z
+          // This makes the edges naturally fade based on the curvature
+          float edgeFade = pow(max(0.0, vNormal.z), 2.0);
           
-          // Create a softer edge that can be affected by the lens effect
-          // Inner core is solid, then feathers out gradually
-          float coreRadius = 0.6; // Relative to overall radius
-          float featherStart = coreRadius;
-          float featherEnd = 1.0;
+          // Mix edge color for a subtle rim effect
+          vec3 innerColor = vec3(0.0, 0.0, 0.0);  // Pure black center
+          vec3 edgeColor = vec3(0.05, 0.02, 0.1); // Very dark purple-ish edge
           
-          // Alpha is 1.0 in the core, then fades out to the edge
-          float alpha = 1.0;
-          if (dist > featherStart) {
-            alpha = 1.0 - smoothstep(featherStart, featherEnd, dist);
-          }
+          // Rim highlight is stronger where surface curves away
+          float rimLight = pow(1.0 - max(0.0, vNormal.z), 4.0) * 0.3;
           
-          // Add subtle blue glow at the edge (blue-shifted light)
-          float edgeGlow = smoothstep(featherStart, featherEnd * 0.8, dist) * (1.0 - smoothstep(featherEnd * 0.8, featherEnd, dist));
-          vec3 glowColor = vec3(0.1, 0.2, 0.8); // Blue-shifted
-          color = mix(color, glowColor, edgeGlow * 0.3);
+          // Create subtle time-based wavy distortion at the edge
+          float timeWave = sin(time * 0.5 + dist * 10.0) * 0.5 + 0.5;
+          float edgeGlow = smoothstep(0.7, 0.95, dist) * timeWave * 0.2;
           
-          // Add time-based variation to the edge for a more dynamic appearance
-          float timePulse = sin(time * 0.5 + dist * 8.0) * 0.05 + 0.95;
-          alpha *= timePulse;
+          // Final color combines all effects
+          vec3 color = mix(innerColor, edgeColor, smoothstep(0.5, 1.0, dist));
+          color += vec3(0.05, 0.01, 0.1) * rimLight; // Add subtle rim lighting
+          color += vec3(0.02, 0.01, 0.05) * edgeGlow; // Add edge glow effect
           
-          gl_FragColor = vec4(color, alpha);
+          // Add faint diffuse lighting for 3D appearance
+          color += vec3(0.02, 0.01, 0.03) * diffuse;
+          
+          // Fully opaque black hole
+          gl_FragColor = vec4(color, 1.0);
         }
       `,
-      transparent: true,
-      depthWrite: true, // Important for proper transparency
-      side: THREE.DoubleSide
+      transparent: false, // No transparency for the black hole
+      depthWrite: true,   // Write to depth buffer
+      side: THREE.FrontSide // Only render front faces
     });
     
     this.eventHorizon = new THREE.Mesh(geometry, material);
+    // Position the event horizon slightly back to allow for distortion field
+    this.eventHorizon.position.z = -0.2;
     this.mesh.add(this.eventHorizon);
     
     // Create a visual distortion effect
     this.createDistortionField();
+    
+    // Important: Add the distortion field AFTER the event horizon
+    // so it renders on top for proper lens effect
     this.mesh.add(this.distortionField);
+    
+    // Initialize animation properties for smooth growth
+    this.targetRadius = this.getRadius();
+    this.currentRadius = this.getRadius();
+    this.growthSpeed = 1.0; // Speed multiplier for growth animation
   }
   
   createAccretionDisk() {
-    const diskRadius = this.getRadius() * 3;
-    const diskGeometry = new THREE.RingGeometry(
-      this.getRadius() * 1.2, 
-      diskRadius, 
-      64, 
-      8
-    );
+    const diskGeometry = new THREE.TorusGeometry(2.1 * this.getRadius(), 0.9 * this.getRadius(), 64, 8);
     
     // Use our custom shader for the accretion disk
     const diskMaterial = new THREE.ShaderMaterial({
@@ -119,8 +138,9 @@ export class BlackHole {
   
   createDistortionField() {
     // Visual distortion field (gravitational lensing effect)
-    const distortionRadius = this.getRadius() * 6;
-    const distortionGeometry = new THREE.CircleGeometry(distortionRadius, 64);
+    // Only slightly larger than the black hole (10% larger)
+    const distortionRadius = this.getRadius() * 1.65; // Slightly larger than event horizon
+    const distortionGeometry = new THREE.SphereGeometry(distortionRadius, 64, 32);
     
     // Use a custom shader material for the distortion effect
     const distortionMaterial = new THREE.ShaderMaterial({
@@ -128,13 +148,17 @@ export class BlackHole {
         time: { value: 0 },
         mass: { value: this.mass },
         radius: { value: this.getRadius() },
-        distortionStrength: { value: 0.2 + (this.mass - 1) * 0.05 } // Scale with mass
+        distortionStrength: { value: 0.3 + (this.mass - 1) * 0.05 } // Increased strength for better effect
       },
       vertexShader: `
         varying vec2 vUv;
+        varying vec3 vPosition;
+        varying vec3 vNormal;
         
         void main() {
           vUv = uv;
+          vPosition = position;
+          vNormal = normalize(normalMatrix * normal);
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
@@ -145,6 +169,8 @@ export class BlackHole {
         uniform float distortionStrength;
         
         varying vec2 vUv;
+        varying vec3 vPosition;
+        varying vec3 vNormal;
         
         float getSchwarzschildRadius(float mass) {
           return mass * 0.1; // Simplified for visual effect
@@ -172,31 +198,39 @@ export class BlackHole {
           einsteinRing *= smoothstep(schwarzschildRadius * 1.7, schwarzschildRadius * 1.6, dist);
           einsteinRing *= 1.5; // Enhance the effect
           
+          // Use normal vector to create a 3D falloff
+          float normalFade = max(0.0, dot(vNormal, vec3(0.0, 0.0, 1.0)));
+          
           // Add subtle pulsation and time variance
           float timePulse = sin(time * 0.5) * 0.05 + 0.95;
           float timeVarying = (sin(dist * 20.0 - time * 2.0) * 0.5 + 0.5) * 0.2;
           
-          // Blue-shifted light visualization
-          vec3 baseColor = vec3(0.1, 0.2, 0.6);
+          // Very dark color with subtle purple tint to match the event horizon
+          vec3 baseColor = vec3(0.01, 0.005, 0.02);
           
           // Combine all effects 
           vec3 color = baseColor * (distortionIntensity + einsteinRing + timeVarying) * timePulse;
           
           // Alpha is stronger near the event horizon and fades out at larger distances
-          float alpha = (distortionIntensity + einsteinRing * 0.5) * 0.4;
-          alpha *= smoothstep(1.0, 0.1, dist); // Fade out with distance
+          // Also fade based on view angle for a more 3D effect
+          float alpha = (distortionIntensity + einsteinRing * 0.5) * 0.4; // Increased opacity
+          alpha *= smoothstep(1.0, 0.3, dist); // Fade out with distance more gradually
+          alpha *= pow(1.0 - normalFade, 2.0); // Fade at edges based on normal
           
           gl_FragColor = vec4(color, alpha);
         }
       `,
       transparent: true,
       blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide
+      depthWrite: false, // Don't write to depth buffer so it renders on top
+      depthTest: true,   // But still test against depth buffer
+      side: THREE.FrontSide, // Only render front faces
+      renderOrder: 10    // Force it to render after all other objects
     });
     
     this.distortionField = new THREE.Mesh(distortionGeometry, distortionMaterial);
-    this.distortionField.position.z = -0.01; // Keep the distortion field behind the event horizon
+    this.distortionField.position.z = 0.05; // Slightly in front of the event horizon
+    this.distortionField.renderOrder = 10; // Ensure it renders after other objects
   }
   
   getRadius() {
@@ -217,18 +251,11 @@ export class BlackHole {
     // Calculate force magnitude using Newton's law of gravitation
     // F = G * (m1 * m2) / r^2
     // Modified to ensure distant objects still experience some pull
-    let forceMagnitude;
-    
-    if (distance > 30) {
-      // For distant objects, reduce the falloff from inverse square to inverse
-      // This ensures distant objects don't get "stuck" due to too weak forces
-      forceMagnitude = this.gravitationalConstant * this.mass * objectMass / distance;
-    } else {
-      // Normal inverse square law for closer objects
-      forceMagnitude = this.gravitationalConstant * this.mass * objectMass / (distance * distance);
-    }
-    
-    // Apply a minimum force to ensure motion
+    const invSquare = this.gravitationalConstant * this.mass * objectMass / (distance * distance);
+    const invLinear = this.gravitationalConstant * this.mass * objectMass / distance;
+    let t = (distance - 30) / 20;
+    t = Math.max(0, Math.min(1, t));
+    let forceMagnitude = (1 - t) * invSquare + t * invLinear;
     const minForceMagnitude = 0.005 * objectMass;
     if (forceMagnitude < minForceMagnitude) {
       forceMagnitude = minForceMagnitude;
@@ -256,50 +283,56 @@ export class BlackHole {
         this.mesh.children[1].material.uniforms.mass.value = this.mass;
         
         if (this.mesh.children[1].material.uniforms.distortionStrength) {
-          this.mesh.children[1].material.uniforms.distortionStrength.value = 0.2 + (this.mass - 1) * 0.05; // Increase with mass
+          this.mesh.children[1].material.uniforms.distortionStrength.value = 
+            0.3 + (this.mass - 1) * 0.05; // Increase with mass
         }
       }
     }
     
+    // Set the target radius for smooth animation
+    this.targetRadius = this.getRadius();
     this.updateVisuals();
   }
   
   updateVisuals() {
-    // Update black hole radius
-    const newRadius = this.getRadius();
+    if (!this.mesh) return;
     
-    // Update event horizon
-    if (this.eventHorizon) {
-      // Scale the black hole
-      this.eventHorizon.scale.set(1, 1, 1);
+    // Smoothly interpolate current radius towards target
+    const diff = this.targetRadius - this.currentRadius;
+    this.currentRadius += diff * 0.05; // 5% per frame for smooth transition
+    
+    // Don't update geometries on every frame - only when meaningful change occurs
+    if (Math.abs(diff) > 0.001) {
+      // Update event horizon
+      if (this.eventHorizon) {
+        // Update material uniforms
+        if (this.eventHorizon.material && this.eventHorizon.material.uniforms) {
+          this.eventHorizon.material.uniforms.radius.value = this.currentRadius;
+          this.eventHorizon.material.uniforms.mass.value = this.mass;
+        }
+        
+        // Update geometry smoothly rather than replacing it
+        this.eventHorizon.scale.set(
+          this.currentRadius / this.getRadius(), 
+          this.currentRadius / this.getRadius(), 
+          this.currentRadius / this.getRadius()
+        );
+      }
       
-      // Create new geometry with updated radius
-      this.eventHorizon.geometry.dispose(); // Clean up the old geometry
-      this.eventHorizon.geometry = new THREE.CircleGeometry(newRadius * 1.5, 64);
-      
-      // Update the shader uniforms
-      if (this.eventHorizon.material.uniforms) {
-        this.eventHorizon.material.uniforms.radius.value = newRadius;
+      // Update distortion field
+      if (this.distortionField) {
+        // Update material uniforms
+        if (this.distortionField.material && this.distortionField.material.uniforms) {
+          this.distortionField.material.uniforms.radius.value = this.currentRadius;
+          this.distortionField.material.uniforms.mass.value = this.mass;
+          this.distortionField.material.uniforms.distortionStrength.value = 0.3 + (this.mass - 1) * 0.05;
+        }
+        
+        // Scale the distortion field slightly larger than the event horizon
+        const distortionScale = this.currentRadius / this.getRadius();
+        this.distortionField.scale.set(distortionScale, distortionScale, distortionScale);
       }
     }
-    
-    // Update the distortion field
-    if (this.distortionField) {
-      const distortionRadius = newRadius * 6;
-      
-      // Create new geometry for distortion field
-      this.distortionField.geometry.dispose();
-      this.distortionField.geometry = new THREE.CircleGeometry(distortionRadius, 64);
-      
-      // Update uniforms
-      if (this.distortionField.material.uniforms) {
-        this.distortionField.material.uniforms.radius.value = newRadius;
-        this.distortionField.material.uniforms.distortionStrength.value = 0.2 + (this.mass - 1) * 0.05; // Increase with mass
-      }
-    }
-    
-    // Update shader time uniforms for animations
-    this.updateShaderTimeUniforms();
   }
   
   // Add a method to update shader time uniforms
@@ -348,14 +381,57 @@ export class BlackHole {
     return false;
   }
   
+  // Add this method to animate objects being absorbed
+  animateObjectAbsorption(object) {
+    if (!object || !object.mesh) return;
+    
+    // Store the original position if not already stored
+    if (!object._originalZ) {
+      object._originalZ = object.mesh.position.z;
+    }
+    
+    // Calculate distance to black hole
+    const dist = this.position.distanceTo(object.position);
+    const blackHoleRadius = this.getRadius() * 1.5;
+    
+    // As the object gets closer to the black hole, move it forward in Z
+    // This creates the effect of objects passing in front of the black hole
+    const threshold = blackHoleRadius * 3; // Start moving forward at this distance
+    const minDist = blackHoleRadius * 0.5; // At this distance, start moving back
+    
+    if (dist < threshold && dist > minDist) {
+      // Move forward proportionally to how close it is to the black hole
+      const factor = 1.0 - (dist - minDist) / (threshold - minDist);
+      const zOffset = factor * 0.5; // Max z-offset of 0.5
+      
+      // Apply z-offset to make it appear in front of the black hole
+      object.mesh.position.z = object._originalZ + zOffset;
+    } 
+    else if (dist <= minDist) {
+      // When very close, start moving back behind the black hole
+      const factor = Math.max(0, dist / minDist);
+      const zOffset = (factor - 1.0) * 0.5; // Goes from 0 to -0.5
+      
+      // Apply z-offset to make it disappear behind the black hole
+      object.mesh.position.z = object._originalZ + zOffset;
+    }
+  }
+  
   update(deltaTime, celestialObjects) {
     // Update shader time uniforms for animations
     this.updateShaderTimeUniforms();
     
-    // Check for collisions and absorptions
+    // Update the smooth growth animation
+    this.updateVisuals();
+    
+    // Process all objects for z-position adjustments and absorptions
     if (celestialObjects) {
       for (const object of celestialObjects) {
         if (!object.isAbsorbed) {
+          // Apply z-adjustment to make objects appear in front of black hole
+          this.animateObjectAbsorption(object);
+          
+          // Check for absorption
           if (this.checkAbsorption(object)) {
             // Mark the object as absorbed
             object.isAbsorbed = true;
@@ -368,9 +444,6 @@ export class BlackHole {
         }
       }
     }
-    
-    // Set black hole position
-    this.mesh.position.z = 0; // Set to appropriate z-depth
   }
   
   // Get screen position for lens effect

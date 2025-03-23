@@ -16,6 +16,9 @@ export class CelestialObject {
     this.velocity = options.velocity || new THREE.Vector3(0, 0, 0);
     this.color = options.color || new THREE.Color(0xffffff);
     this.showTrajectory = false; // Trajectories always disabled
+    this._oscPhase = Math.random() * Math.PI * 2; // Random phase for z-oscillation
+    this._oscSpeed = 0.5 + Math.random() * 0.5; // Random oscillation speed
+    this._oscAmplitude = 0.2 + Math.random() * 0.3; // Random oscillation amplitude
     
     this.createMesh();
   }
@@ -27,10 +30,10 @@ export class CelestialObject {
     const radius = Math.pow(this.mass, 1/3) * 0.8;
     
     if (this.type === OBJECT_TYPES.STAR) {
-      // For stars, use a glow shader material
-      geometry = new THREE.CircleGeometry(radius, 32);
+      // For stars, use a glow shader material with a 3D sphere geometry
+      geometry = new THREE.SphereGeometry(radius, 32, 16);
       
-      // Create a canvas texture with bright center
+      // Create a canvas texture with bright center for the diffuse map
       const canvas = document.createElement('canvas');
       canvas.width = 128;
       canvas.height = 128;
@@ -57,17 +60,43 @@ export class CelestialObject {
       // Create texture from canvas
       const texture = new THREE.CanvasTexture(canvas);
       
-      // Create material with the texture and additive blending
-      material = new THREE.MeshBasicMaterial({
+      // Create an emissive texture for the glow effect
+      const emissiveCanvas = document.createElement('canvas');
+      emissiveCanvas.width = 128;
+      emissiveCanvas.height = 128;
+      const emissiveCtx = emissiveCanvas.getContext('2d');
+      
+      // Create a more intense radial gradient for the emissive map
+      const emissiveGradient = emissiveCtx.createRadialGradient(
+        emissiveCanvas.width/2, emissiveCanvas.height/2, 0,
+        emissiveCanvas.width/2, emissiveCanvas.height/2, emissiveCanvas.width/2
+      );
+      
+      // Bright center with color-based outer glow
+      emissiveGradient.addColorStop(0, `rgba(255, 255, 255, 1)`);  // White hot center
+      emissiveGradient.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, 0.8)`);  // Original color
+      emissiveGradient.addColorStop(1, `rgba(${r/3}, ${g/3}, ${b/3}, 0)`);  // Fade out
+      
+      emissiveCtx.fillStyle = emissiveGradient;
+      emissiveCtx.fillRect(0, 0, emissiveCanvas.width, emissiveCanvas.height);
+      
+      const emissiveTexture = new THREE.CanvasTexture(emissiveCanvas);
+      
+      // Use MeshPhongMaterial with emissive properties for a glowing effect
+      material = new THREE.MeshPhongMaterial({
         map: texture,
+        emissive: new THREE.Color(this.color),
+        emissiveMap: emissiveTexture,
+        emissiveIntensity: 1.5,
         transparent: true,
         blending: THREE.AdditiveBlending,
+        shininess: 100,
         depthWrite: false
       });
       
     } else if (this.type === OBJECT_TYPES.PLANET) {
-      // For planets, use a circle with a texture
-      geometry = new THREE.CircleGeometry(radius, 32);
+      // For planets, use a 3D sphere with a texture
+      geometry = new THREE.SphereGeometry(radius, 32, 16);
       
       // Create a texture for the planet
       const texture = this.createPlanetTexture();
@@ -78,7 +107,7 @@ export class CelestialObject {
       });
       
     } else { // DEBRIS
-      geometry = new THREE.CircleGeometry(radius, 16);
+      geometry = new THREE.SphereGeometry(radius, 16, 8);
       
       material = new THREE.MeshBasicMaterial({
         color: this.color,
@@ -192,7 +221,29 @@ export class CelestialObject {
     this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
     
     // Update mesh position
-    this.mesh.position.copy(this.position);
+    this.mesh.position.x = this.position.x;
+    this.mesh.position.y = this.position.y;
+    
+    // Add vertical oscillation based on type and time
+    if (!this.isAbsorbed) {
+      const time = performance.now() * 0.001;
+      let zOffset = 0;
+      
+      if (this.type === OBJECT_TYPES.STAR) {
+        // Slower, more subtle oscillation for stars
+        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude;
+      } else {
+        // More pronounced oscillation for planets and debris 
+        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude * 1.5;
+        
+        // Add some randomness to planet orbits in z-axis
+        if (Math.random() < 0.005) { // Occasional slight z-velocity changes
+          this._oscAmplitude = Math.max(0.1, Math.min(0.8, this._oscAmplitude + (Math.random() - 0.5) * 0.1));
+        }
+      }
+      
+      this.mesh.position.z = zOffset;
+    }
     
     // Apply rotation
     if (this.mesh) {
