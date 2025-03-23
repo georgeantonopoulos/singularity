@@ -24,93 +24,265 @@ export class CelestialObject {
   }
   
   createMesh() {
+    const radius = this.getRadius();
+    
     let geometry, material;
     
-    // Size is proportional to mass
-    const radius = Math.pow(this.mass, 1/3) * 0.8;
-    
     if (this.type === OBJECT_TYPES.STAR) {
-      // For stars, use a glow shader material with a 3D sphere geometry
-      geometry = new THREE.SphereGeometry(radius, 32, 16);
+      // Create a group to hold all star components
+      this.mesh = new THREE.Group();
+      this.mesh.position.copy(this.position);
       
-      // Create a canvas texture with bright center for the diffuse map
-      const canvas = document.createElement('canvas');
-      canvas.width = 128;
-      canvas.height = 128;
-      const ctx = canvas.getContext('2d');
+      // Core of the star - solid sphere for depth and shadows - brightened for bloom
+      geometry = new THREE.SphereGeometry(radius * 0.6, 24, 16);
+      material = new THREE.MeshBasicMaterial({
+        color: this.color,
+        transparent: false,
+        depthWrite: true
+      });
       
-      // Draw a radial gradient for the star
-      const gradient = ctx.createRadialGradient(
-        canvas.width/2, canvas.height/2, 0,
-        canvas.width/2, canvas.height/2, canvas.width/2
-      );
+      // Intensify the color to trigger bloom
+      const brightColor = new THREE.Color(this.color).multiplyScalar(1.5);
+      material.color = brightColor;
       
-      // Convert THREE.Color to CSS format
-      const r = Math.floor(this.color.r * 255);
-      const g = Math.floor(this.color.g * 255);
-      const b = Math.floor(this.color.b * 255);
+      const coreMesh = new THREE.Mesh(geometry, material);
+      this.mesh.add(coreMesh);
       
-      // Create bright white center fading to the star's color
-      gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);  // Original color
-      gradient.addColorStop(1, `rgba(${r/2}, ${g/2}, ${b/2}, 0.1)`);  // Darker edge
+      // Create a volumetric star effect using multiple intersecting planes
+      // Each plane will be positioned at a different angle to create a 3D effect
+      const starMaterial = this.createStarShaderMaterial(radius);
       
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Create multiple intersecting planes to give 3D volume appearance
+      const planeSize = radius * 15;
       
-      // Create texture from canvas
-      const texture = new THREE.CanvasTexture(canvas);
+      // Function to create a plane at a specific rotation
+      const createStarPlane = (rotationY, rotationZ) => {
+        const planeGeometry = new THREE.PlaneGeometry(planeSize, planeSize);
+        const plane = new THREE.Mesh(planeGeometry, starMaterial.clone());
+        
+        // Apply rotation to create 3D star shape
+        plane.rotation.y = rotationY;
+        plane.rotation.z = rotationZ;
+        
+        // Disable lookAt for a more volumetric appearance
+        return plane;
+      };
       
-      // Create an emissive texture for the glow effect
-      const emissiveCanvas = document.createElement('canvas');
-      emissiveCanvas.width = 128;
-      emissiveCanvas.height = 128;
-      const emissiveCtx = emissiveCanvas.getContext('2d');
+      // Create 4 planes at 45-degree angles to form a cross
+      const planes = [
+        createStarPlane(0, 0),                         // Front-facing
+        createStarPlane(Math.PI / 2, 0),               // Side-facing
+        createStarPlane(Math.PI / 4, Math.PI / 4),     // Diagonal 1
+        createStarPlane(-Math.PI / 4, Math.PI / 4)     // Diagonal 2
+      ];
       
-      // Create a more intense radial gradient for the emissive map
-      const emissiveGradient = emissiveCtx.createRadialGradient(
-        emissiveCanvas.width/2, emissiveCanvas.height/2, 0,
-        emissiveCanvas.width/2, emissiveCanvas.height/2, emissiveCanvas.width/2
-      );
+      // Add all planes to the star mesh
+      planes.forEach(plane => this.mesh.add(plane));
       
-      // Bright center with color-based outer glow
-      emissiveGradient.addColorStop(0, `rgba(255, 255, 255, 1)`);  // White hot center
-      emissiveGradient.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, 0.8)`);  // Original color
-      emissiveGradient.addColorStop(1, `rgba(${r/3}, ${g/3}, ${b/3}, 0)`);  // Fade out
+      // Add these planes to the object for animation access
+      this.starPlanes = planes;
       
-      emissiveCtx.fillStyle = emissiveGradient;
-      emissiveCtx.fillRect(0, 0, emissiveCanvas.width, emissiveCanvas.height);
-      
-      const emissiveTexture = new THREE.CanvasTexture(emissiveCanvas);
-      
-      // Use MeshPhongMaterial with emissive properties for a glowing effect
-      material = new THREE.MeshPhongMaterial({
-        map: texture,
-        emissive: new THREE.Color(this.color),
-        emissiveMap: emissiveTexture,
-        emissiveIntensity: 1.5,
+      // Add a volumetric glow sphere - enhanced for bloom
+      const glowGeometry = new THREE.SphereGeometry(radius * 1.5, 32, 16);
+      const glowMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          time: { value: 0.0 },
+          color: { value: new THREE.Color(this.color).multiplyScalar(1.3) }, // Brighter color
+          intensity: { value: 0.8 } // Increased intensity
+        },
+        vertexShader: `
+          varying vec3 vNormal;
+          varying vec3 vPosition;
+          
+          void main() {
+            vNormal = normalize(normalMatrix * normal);
+            vPosition = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float time;
+          uniform vec3 color;
+          uniform float intensity;
+          
+          varying vec3 vNormal;
+          varying vec3 vPosition;
+          
+          void main() {
+            // Calculate fresnel effect (stronger at grazing angles)
+            float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 2.0);
+            
+            // Add subtle pulsing
+            float pulse = 0.85 + 0.15 * sin(time * 1.5);
+            
+            // Combine effects - amplified for bloom
+            vec3 glowColor = color * (fresnel * 1.8 + 0.5) * intensity * pulse;
+            
+            gl_FragColor = vec4(glowColor, fresnel * intensity);
+          }
+        `,
         transparent: true,
         blending: THREE.AdditiveBlending,
-        shininess: 100,
+        side: THREE.BackSide,
         depthWrite: false
       });
       
+      const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+      this.mesh.add(glowMesh);
+      this.glowMesh = glowMesh;
+      
+      // Add corona effect (larger outer glow) - enhanced for bloom
+      const coronaGeometry = new THREE.SphereGeometry(radius * 4, 32, 16);
+      const coronaMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          time: { value: 0.0 },
+          color: { value: new THREE.Color(this.color).multiplyScalar(1.2) } // Brighter color
+        },
+        vertexShader: `
+          varying vec3 vNormal;
+          
+          void main() {
+            vNormal = normalize(normalMatrix * normal);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float time;
+          uniform vec3 color;
+          varying vec3 vNormal;
+          
+          void main() {
+            float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 4.0);
+            float pulse = 0.9 + 0.1 * sin(time + length(vNormal) * 10.0);
+            
+            // Increased color intensity for bloom
+            vec3 finalColor = color * fresnel * pulse * 0.4;
+            float alpha = fresnel * 0.5;
+            
+            gl_FragColor = vec4(finalColor, alpha);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        side: THREE.BackSide,
+        depthWrite: false
+      });
+      
+      const coronaMesh = new THREE.Mesh(coronaGeometry, coronaMaterial);
+      this.mesh.add(coronaMesh);
+      this.coronaMesh = coronaMesh;
+      
+      // Set random rotation for twinkling effect
+      this.rotationSpeed = (Math.random() - 0.5) * 0.002; // Slow rotation
+      this.pulseSpeed = 0.5 + Math.random() * 1.0; // For pulsing effect
+      this.pulseAmount = 0.15 + Math.random() * 0.15; // Pulse intensity
+      this.pulseClock = Math.random() * Math.PI * 2; // Random start phase
+      
     } else if (this.type === OBJECT_TYPES.PLANET) {
-      // For planets, use a 3D sphere with a texture
-      geometry = new THREE.SphereGeometry(radius, 32, 16);
+      // For planets, use a 3D sphere with physically-based material and fresnel effect
+      geometry = new THREE.SphereGeometry(radius, 32, 32);
       
-      // Create a texture for the planet
-      const texture = this.createPlanetTexture();
+      // Convert THREE.Color to components for shader
+      const r = this.color.r;
+      const g = this.color.g;
+      const b = this.color.b;
       
-      material = new THREE.MeshBasicMaterial({
-        map: texture,
-        transparent: false
+      // Create a shader material with fresnel effect for planets
+      material = new THREE.ShaderMaterial({
+        uniforms: {
+          baseColor: { value: new THREE.Color(this.color) },
+          time: { value: 0 },
+          resolution: { value: new THREE.Vector2(1024, 1024) }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          varying vec3 vNormal;
+          varying vec3 vPosition;
+          
+          void main() {
+            vUv = uv;
+            vNormal = normalize(normalMatrix * normal);
+            vPosition = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 baseColor;
+          uniform float time;
+          uniform vec2 resolution;
+          
+          varying vec2 vUv;
+          varying vec3 vNormal;
+          varying vec3 vPosition;
+          
+          // Noise function for planet texturing
+          float hash(float n) { return fract(sin(n) * 43758.5453123); }
+          
+          float noise(vec2 p) {
+            vec2 ip = floor(p);
+            vec2 fp = fract(p);
+            fp = fp * fp * (3.0 - 2.0 * fp);
+            
+            float n = ip.x + ip.y * 57.0;
+            
+            return mix(
+              mix(hash(n), hash(n + 1.0), fp.x),
+              mix(hash(n + 57.0), hash(n + 58.0), fp.x),
+              fp.y
+            );
+          }
+          
+          // Fractal Brownian Motion for terrain generation
+          float fbm(vec2 p) {
+            float f = 0.0;
+            float amp = 0.5;
+            
+            for(int i = 0; i < 5; i++) {
+              f += amp * noise(p);
+              p *= 2.0;
+              amp *= 0.5;
+            }
+            
+            return f;
+          }
+          
+          void main() {
+            // Calculate fresnel effect (rim lighting)
+            float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 3.0);
+            
+            // Generate planet surface details using noise
+            float noiseValue = fbm(vUv * 10.0 + time * 0.05);
+            
+            // Create terrain using the base color
+            vec3 terrainColor = baseColor * (0.7 + 0.3 * noiseValue);
+            
+            // Add darker areas (oceans/shadows)
+            terrainColor = mix(terrainColor, terrainColor * 0.3, smoothstep(0.4, 0.5, noiseValue));
+            
+            // Add highlight areas (mountains/clouds)
+            terrainColor = mix(terrainColor, vec3(1.0), smoothstep(0.7, 0.8, noiseValue) * 0.3);
+            
+            // Add atmospheric glow at the edges using fresnel
+            vec3 atmosphereColor = baseColor * 1.2 + vec3(0.2);
+            vec3 finalColor = mix(terrainColor, atmosphereColor, fresnel * 0.6);
+            
+            gl_FragColor = vec4(finalColor, 1.0);
+          }
+        `,
+        side: THREE.FrontSide,
+        transparent: false,
+        depthWrite: true
       });
       
     } else { // DEBRIS
       geometry = new THREE.SphereGeometry(radius, 16, 8);
       
-      material = new THREE.MeshBasicMaterial({
+      // Use a more interesting material for debris with some shininess
+      material = new THREE.MeshStandardMaterial({
         color: this.color,
+        roughness: 0.7,
+        metalness: 0.3,
+        emissive: new THREE.Color(this.color).multiplyScalar(0.2),
         transparent: false
       });
     }
@@ -247,7 +419,61 @@ export class CelestialObject {
     
     // Apply rotation
     if (this.mesh) {
-      this.mesh.rotation.z += this.rotationSpeed;
+      this.mesh.rotation.y += this.rotationSpeed;
+      
+      // Update time uniforms for shader animations
+      if (this.mesh.material && this.mesh.material.uniforms && this.mesh.material.uniforms.time) {
+        this.mesh.material.uniforms.time.value += deltaTime;
+      }
+      
+      // For stars, update the shader time uniform in all components
+      if (this.type === OBJECT_TYPES.STAR) {
+        // Update all star planes' uniforms
+        if (this.starPlanes) {
+          this.starPlanes.forEach(plane => {
+            if (plane.material && plane.material.uniforms && plane.material.uniforms.time) {
+              plane.material.uniforms.time.value += deltaTime;
+            }
+          });
+        }
+        
+        // Update glow and corona mesh uniforms
+        if (this.glowMesh && this.glowMesh.material && this.glowMesh.material.uniforms) {
+          this.glowMesh.material.uniforms.time.value += deltaTime;
+        }
+        
+        if (this.coronaMesh && this.coronaMesh.material && this.coronaMesh.material.uniforms) {
+          this.coronaMesh.material.uniforms.time.value += deltaTime;
+        }
+        
+        // Update pulse clock
+        this.pulseClock += deltaTime * this.pulseSpeed;
+        
+        // Calculate pulse factor (0.8 to 1.2 range)
+        const pulseFactor = 1 + Math.sin(this.pulseClock) * this.pulseAmount;
+        
+        // Apply subtle pulsing to the planes to create dynamic effect
+        if (this.starPlanes) {
+          this.starPlanes.forEach(plane => {
+            if (!plane.userData.originalScale) {
+              plane.userData.originalScale = plane.scale.clone();
+            }
+            
+            // Different pulsing for each plane for more natural effect
+            const individualPulse = pulseFactor * (0.95 + 0.1 * Math.random());
+            plane.scale.copy(plane.userData.originalScale).multiplyScalar(individualPulse);
+          });
+        }
+        
+        // Subtly rotate the star planes for a more dynamic look
+        if (this.starPlanes && this.starPlanes.length > 0) {
+          // Different rotation speeds for different planes
+          this.starPlanes[0].rotation.z += deltaTime * 0.05;
+          if (this.starPlanes.length > 1) this.starPlanes[1].rotation.z -= deltaTime * 0.03;
+          if (this.starPlanes.length > 2) this.starPlanes[2].rotation.x += deltaTime * 0.04;
+          if (this.starPlanes.length > 3) this.starPlanes[3].rotation.x -= deltaTime * 0.02;
+        }
+      }
     }
   }
   
@@ -347,5 +573,320 @@ export class CelestialObject {
       position: this.position,
       radius: this.getRadius()
     };
+  }
+  
+  // Create a texture for star rays
+  createStarRayTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    
+    // Create gradient from center
+    const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(0.1, 'rgba(255, 255, 255, 0.6)');
+    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.4)');
+    gradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.2)');
+    gradient.addColorStop(0.6, 'rgba(255, 255, 255, 0.1)');
+    gradient.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+    
+    // Fill background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0)';
+    ctx.fillRect(0, 0, 128, 128);
+    
+    // Draw main ray along x-axis
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 56, 128, 16);
+    
+    // Add horizontal lens flare effect
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.beginPath();
+    ctx.arc(64, 64, 8, 0, Math.PI * 2);
+    ctx.fill();
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+  
+  // Create a texture for the star points (4-pointed star)
+  createStarPointsTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    
+    // Clear canvas with transparency
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Center of canvas
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    // Draw star points
+    const drawStarRay = (angle, length, width) => {
+      ctx.save();
+      ctx.translate(centerX, centerY);
+      ctx.rotate(angle);
+      
+      // Create gradient for the ray
+      const gradient = ctx.createLinearGradient(0, 0, length, 0);
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
+      gradient.addColorStop(0.1, 'rgba(255, 255, 255, 0.7)');
+      gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.5)');
+      gradient.addColorStop(0.6, 'rgba(255, 255, 255, 0.2)');
+      gradient.addColorStop(1.0, 'rgba(255, 255, 255, 0)');
+      
+      ctx.fillStyle = gradient;
+      
+      // Draw the ray as a long rectangle
+      ctx.beginPath();
+      ctx.moveTo(0, -width / 2);
+      ctx.lineTo(length, -width / 4);
+      ctx.lineTo(length, width / 4);
+      ctx.lineTo(0, width / 2);
+      ctx.closePath();
+      ctx.fill();
+      
+      ctx.restore();
+    };
+    
+    // Draw 4 main rays
+    const rayLength = canvas.width * 0.5;
+    const rayWidth = canvas.width * 0.12;
+    
+    drawStarRay(0, rayLength, rayWidth); // Right
+    drawStarRay(Math.PI / 2, rayLength, rayWidth); // Up
+    drawStarRay(Math.PI, rayLength, rayWidth); // Left
+    drawStarRay(3 * Math.PI / 2, rayLength, rayWidth); // Down
+    
+    // Draw 4 diagonal rays (thinner)
+    const diagonalRayLength = canvas.width * 0.35;
+    const diagonalRayWidth = canvas.width * 0.05;
+    
+    drawStarRay(Math.PI / 4, diagonalRayLength, diagonalRayWidth); // Up-Right
+    drawStarRay(3 * Math.PI / 4, diagonalRayLength, diagonalRayWidth); // Up-Left
+    drawStarRay(5 * Math.PI / 4, diagonalRayLength, diagonalRayWidth); // Down-Left
+    drawStarRay(7 * Math.PI / 4, diagonalRayLength, diagonalRayWidth); // Down-Right
+    
+    // Draw center glow
+    const glowRadius = canvas.width * 0.1;
+    const glowGradient = ctx.createRadialGradient(
+      centerX, centerY, 0,
+      centerX, centerY, glowRadius
+    );
+    
+    glowGradient.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
+    glowGradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.5)');
+    glowGradient.addColorStop(1.0, 'rgba(255, 255, 255, 0)');
+    
+    ctx.fillStyle = glowGradient;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Create texture
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+  
+  // Create a texture for the star center
+  createStarCenterTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Center of canvas
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    // Create bright center with radial gradient
+    const gradient = ctx.createRadialGradient(
+      centerX, centerY, 0,
+      centerX, centerY, canvas.width / 2
+    );
+    
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.3)');
+    gradient.addColorStop(1.0, 'rgba(255, 255, 255, 0)');
+    
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, canvas.width / 2, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Create texture
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+  
+  // Create a texture for lens flares
+  createFlareTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Center of canvas
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    // Create flare with radial gradient
+    const gradient = ctx.createRadialGradient(
+      centerX, centerY, 0,
+      centerX, centerY, canvas.width / 2
+    );
+    
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.3)');
+    gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.1)');
+    gradient.addColorStop(1.0, 'rgba(255, 255, 255, 0)');
+    
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, canvas.width / 2, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Create texture
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+  
+  // Create a star shader material to give stars a spiky, glowing appearance
+  createStarShaderMaterial(radius) {
+    // Get normalized color components
+    const r = this.color.r;
+    const g = this.color.g;
+    const b = this.color.b;
+    
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        time: { value: 0.0 },
+        radius: { value: radius },
+        starColor: { value: new THREE.Vector3(r, g, b) },
+        resolution: { value: new THREE.Vector2(window.innerWidth || 1024, window.innerHeight || 1024) }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        
+        void main() {
+          vUv = uv;
+          vPosition = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float time;
+        uniform float radius;
+        uniform vec3 starColor;
+        uniform vec2 resolution;
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        
+        // Random function for twinkling
+        float random(vec2 st) {
+          return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+        }
+        
+        // Improved noise function
+        float noise(vec2 st) {
+          vec2 i = floor(st);
+          vec2 f = fract(st);
+          
+          // Cubic interpolation
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          
+          // Four corners
+          float a = random(i);
+          float b = random(i + vec2(1.0, 0.0));
+          float c = random(i + vec2(0.0, 1.0));
+          float d = random(i + vec2(1.0, 1.0));
+          
+          // Mix 4 corners
+          return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        }
+        
+        // Star ray function - optimized for sharper rays
+        float starRay(vec2 uv, float numPoints, float sharpness) {
+          vec2 centered = uv * 2.0 - 1.0;
+          float angle = atan(centered.y, centered.x);
+          float len = length(centered);
+          
+          // Make sharper peaks at each point of the star
+          float starShape = abs(mod(angle + time * 0.1, 3.14159 / numPoints) - 3.14159 / (numPoints * 2.0));
+          starShape = pow(starShape, sharpness);
+          
+          // Distance falloff
+          float falloff = smoothstep(1.0, 0.0, len);
+          
+          return starShape * falloff;
+        }
+                
+        void main() {
+          vec2 uv = vUv;
+          vec2 centered = uv * 2.0 - 1.0;
+          float dist = length(centered);
+          
+          // Base bright center (intensified for bloom)
+          float core = smoothstep(0.6, 0.0, dist);
+          // Make the core extra bright to trigger bloom
+          core = pow(core, 0.5) * 1.5;
+          
+          // Create rays with different frequencies
+          float ray1 = starRay(uv, 4.0, 3.0) * 0.8; // 4-point star, increased intensity
+          float ray2 = starRay(uv, 8.0, 5.0) * 0.5; // 8-point details, increased intensity
+          
+          // Dynamic twinkling
+          float twinkle = noise(centered * 4.0 + time * 0.5);
+          twinkle = 0.8 + 0.2 * twinkle;
+          
+          // Combine for final star shape - amplify brightness for bloom trigger
+          float star = core + ray1 + ray2;
+          star *= twinkle;
+          
+          // Add bloom/glow
+          float glow = smoothstep(1.0, 0.0, dist);
+          glow = pow(glow, 1.3) * 1.2; // Intensified glow
+          
+          // Final color - make it brighter to work well with bloom
+          vec3 finalColor = mix(starColor * 1.3, vec3(1.0), core * 0.8);
+          finalColor = mix(finalColor, starColor * 1.2, (1.0 - glow) * 0.7);
+          
+          // Apply brightness - intensify to trigger bloom nicely
+          finalColor *= (star + glow * 0.6) * 1.3;
+          
+          // Add subtle color variation and extra brightness for the hot center
+          finalColor += vec3(0.1, 0.05, 0.0) * smoothstep(0.5, 0.0, dist) * (0.5 + 0.5 * sin(time));
+          
+          // Make core extra bright - this will make bloom effect pop
+          if (dist < 0.15) {
+              finalColor = mix(finalColor, vec3(1.5, 1.5, 1.5), (1.0 - dist * 6.0) * 0.8);
+          }
+          
+          // Transparency based on star intensity, never fully transparent at center
+          float alpha = min(1.0, star + glow * 0.5);
+          
+          gl_FragColor = vec4(finalColor, alpha);
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
   }
 } 

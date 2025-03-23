@@ -12,6 +12,7 @@ import { EffectComposer } from 'https://unpkg.com/three@0.159.0/examples/jsm/pos
 import { RenderPass } from 'https://unpkg.com/three@0.159.0/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'https://unpkg.com/three@0.159.0/examples/jsm/postprocessing/ShaderPass.js';
 import { CopyShader } from 'https://unpkg.com/three@0.159.0/examples/jsm/shaders/CopyShader.js';
+import { UnrealBloomPass } from 'https://unpkg.com/three@0.159.0/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 // Re-export all modules
 export { 
@@ -20,5 +21,6 @@ export {
   EffectComposer, 
   RenderPass, 
   ShaderPass, 
-  CopyShader 
+  CopyShader,
+  UnrealBloomPass
 }; 

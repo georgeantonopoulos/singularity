@@ -1,4 +1,4 @@
-import { THREE, OrbitControls } from './libs/three-setup.js';
+import { THREE, OrbitControls, EffectComposer, RenderPass, UnrealBloomPass } from './libs/three-setup.js';
 import { BlackHole } from './entities/BlackHole.js';
 import { CelestialObject } from './entities/CelestialObject.js';
 import { generateCelestialObjects } from './utils/objectGenerator.js';
@@ -143,8 +143,10 @@ class Game {
       const distance = this.blackHole.position.distanceTo(this.targetPosition);
       
       // Only update if we're not already very close
-      if (distance > 0.01) {
-        this.blackHole.position.lerp(this.targetPosition, this.lerpFactor);
+      if (distance > 0.1) {
+        // Use a smaller lerp factor for slower movement
+        const slowLerpFactor = this.lerpFactor * 0.3; // Half the original speed
+        this.blackHole.position.lerp(this.targetPosition, slowLerpFactor);
         this.blackHole.mesh.position.copy(this.blackHole.position);
       }
     }
@@ -153,7 +155,7 @@ class Game {
   initThree() {
     // Create scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x000511); // Dark blue background
+    this.scene.background = new THREE.Color(0x01020A); // Darker blue-black background
     
     // Create camera - use orthographic for 2D view
     const aspectRatio = window.innerWidth / window.innerHeight;
@@ -178,6 +180,9 @@ class Game {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(window.devicePixelRatio);
     
+    // Set up post-processing with bloom effect
+    this.setupPostProcessing();
+    
     // Create starfield background - now just on a plane for 2D effect
     this.createStarfield();
     
@@ -189,6 +194,47 @@ class Game {
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
     directionalLight.position.set(10, 10, 10);
     this.scene.add(directionalLight);
+    
+    // Add a subtle warm backlight for rim lighting effects
+    const backLight = new THREE.DirectionalLight(0xffeecc, 0.25);
+    backLight.position.set(-5, -2, -10);
+    this.scene.add(backLight);
+  }
+  
+  // Set up post-processing with bloom effect
+  setupPostProcessing() {
+    // Create a render target for the composer
+    const renderTarget = new THREE.WebGLRenderTarget(
+      window.innerWidth, 
+      window.innerHeight, 
+      {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+        stencilBuffer: false
+      }
+    );
+    
+    // Set up the EffectComposer
+    this.composer = new EffectComposer(this.renderer, renderTarget);
+    
+    // Add the render pass to render the scene
+    const renderPass = new RenderPass(this.scene, this.camera);
+    this.composer.addPass(renderPass);
+    
+    // Add bloom effect pass
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      1.0,    // strength - moderate glow
+      0.4,    // radius - for a softer effect
+      0.999   // threshold - increased to only pick up very bright areas (stars)
+    );
+    this.composer.addPass(bloomPass);
+    
+    // Store the bloom pass for potential adjustments later
+    this.bloomPass = bloomPass;
+    
+    console.log("Post-processing with bloom effect initialized");
   }
   
   // Add a method to set up the lens effect after black hole creation
@@ -217,6 +263,28 @@ class Game {
       // Replace our composer with the lens effect's composer if it was successfully created
       if (this.lensEffect.composer) {
         this.composer = this.lensEffect.composer;
+        
+        // Add the bloom pass to the lens effect's composer for star glow
+        if (this.bloomPass) {
+          // Clone the bloom pass and add it to the lens effect composer
+          const bloomParams = {
+            strength: 1.5,
+            radius: 0.4,
+            threshold: 0.95  // Increased threshold to only bloom stars
+          };
+          
+          const lensBloomPass = new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            bloomParams.strength,
+            bloomParams.radius,
+            bloomParams.threshold
+          );
+          
+          // Add the bloom pass (make sure it's not the last pass)
+          this.composer.addPass(lensBloomPass);
+          console.log("Added bloom pass to lens effect composer");
+        }
+        
         console.log("Post-processing lens effect initialized successfully");
       } else {
         console.warn("Failed to create lens effect composer");
@@ -242,323 +310,182 @@ class Game {
   }
   
   createStarfield() {
-    // Create a starfield background on a plane
-    const starfieldGeometry = new THREE.PlaneGeometry(this.gameWidth*3, this.gameHeight*3);
-    
-    // Create a canvas for the starfield
-    const canvas = document.createElement('canvas');
-    canvas.width = 2048;
-    canvas.height = 2048;
-    const ctx = canvas.getContext('2d');
-    
-    // Fill with darker, more physically accurate gradient
-    const gradient = ctx.createRadialGradient(
-      canvas.width/2, canvas.height/2, 0,
-      canvas.width/2, canvas.height/2, canvas.width/2
-    );
-    
-    // Use darker, more accurate space colors
-    gradient.addColorStop(0, 'rgba(8, 12, 24, 1)');    // Dark blue-black at center
-    gradient.addColorStop(0.4, 'rgba(6, 10, 22, 1)');  // Slightly lighter
-    gradient.addColorStop(0.8, 'rgba(4, 8, 18, 1)');   // Even darker
-    gradient.addColorStop(1, 'rgba(2, 4, 12, 1)');     // Nearly black at edges
-    
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Add subtle nebula effect
-    this.addNebulaeToStarfield(ctx, canvas.width, canvas.height);
-    
-    // Add stars with realistic distribution (Gaussian clusters)
-    this.addRealisticStarDistribution(ctx, canvas.width, canvas.height);
-    
-    // Create texture from canvas
-    const texture = new THREE.CanvasTexture(canvas);
-    
-    // Create material with the texture
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
+    // Create a black background plane
+    const backgroundGeometry = new THREE.PlaneGeometry(this.gameWidth * 2, this.gameHeight * 2);
+    const backgroundMaterial = new THREE.MeshBasicMaterial({
+      color: 0x01020A, // Darker blue-black
+      transparent: false,
       depthWrite: false
     });
-    
-    // Create mesh and add to scene
-    const starfieldMesh = new THREE.Mesh(starfieldGeometry, material);
-    starfieldMesh.position.z = -10; // Behind everything
-    this.scene.add(starfieldMesh);
+    const backgroundMesh = new THREE.Mesh(backgroundGeometry, backgroundMaterial);
+    backgroundMesh.position.z = -100;
+    this.scene.add(backgroundMesh);
+    backgroundMesh.layers.set(0); // Make sure it doesn't get bloom
+
+    // Add sparse bright stars with interesting patterns
+    this.addSparseBrightStars();
   }
   
-  // Add nebula clouds to make the starfield more interesting
-  addNebulaeToStarfield(ctx, width, height) {
-    // Add subtle nebulae/gas clouds
-    const nebulaCount = 6;
+  addSparseBrightStars() {
+    const starsGroup = new THREE.Group();
+    const starCount = 150; // Increased from 50 to 150
     
-    for (let i = 0; i < nebulaCount; i++) {
-      // Random position
-      const x = Math.random() * width;
-      const y = Math.random() * height;
-      const size = Math.random() * width * 0.5 + width * 0.2;
+    // Generate random stars (60% of total)
+    const randomStarCount = Math.floor(starCount * 0.6);
+    for (let i = 0; i < randomStarCount; i++) {
+      const x = (Math.random() - 0.5) * this.gameWidth * 1.8;
+      const y = (Math.random() - 0.5) * this.gameHeight * 1.8;
+      const size = Math.random() * 3 + 1; // Size between 1 and 4 pixels
       
-      // Create nebula gradient
-      const nebulaGradient = ctx.createRadialGradient(
-        x, y, 0,
-        x, y, size
-      );
+      // Randomize brightness a bit more
+      const brightness = Math.random() * 0.3 + 0.7; // 0.7 to 1.0
       
-      // Choose nebula color scheme
-      const colorScheme = Math.floor(Math.random() * 4);
-      let colors;
-      
-      switch (colorScheme) {
-        case 0: // Blue nebula
-          colors = [
-            'rgba(30, 60, 120, 0.06)',
-            'rgba(20, 40, 100, 0.04)',
-            'rgba(15, 30, 80, 0.02)',
-            'rgba(0, 0, 0, 0)'
-          ];
-          break;
-        case 1: // Reddish nebula
-          colors = [
-            'rgba(120, 30, 40, 0.05)',
-            'rgba(100, 20, 30, 0.04)',
-            'rgba(80, 15, 20, 0.02)',
-            'rgba(0, 0, 0, 0)'
-          ];
-          break;
-        case 2: // Purple nebula
-          colors = [
-            'rgba(80, 30, 120, 0.05)',
-            'rgba(60, 20, 100, 0.04)',
-            'rgba(40, 15, 80, 0.02)',
-            'rgba(0, 0, 0, 0)'
-          ];
-          break;
-        default: // Greenish nebula (more rare)
-          colors = [
-            'rgba(30, 100, 60, 0.04)',
-            'rgba(20, 80, 40, 0.03)',
-            'rgba(15, 60, 30, 0.02)',
-            'rgba(0, 0, 0, 0)'
-          ];
-      }
-      
-      // Apply color stops
-      nebulaGradient.addColorStop(0, colors[0]);
-      nebulaGradient.addColorStop(0.3, colors[1]);
-      nebulaGradient.addColorStop(0.6, colors[2]);
-      nebulaGradient.addColorStop(1, colors[3]);
-      
-      // Draw nebula
-      ctx.globalCompositeOperation = 'screen';
-      ctx.fillStyle = nebulaGradient;
-      ctx.beginPath();
-      ctx.arc(x, y, size, 0, Math.PI * 2);
-      ctx.fill();
-      
-      // Add some texture/noise to the nebula
-      this.addNebulaTexture(ctx, x, y, size);
+      const star = this.createStarPoint(x, y, size, brightness);
+      starsGroup.add(star);
     }
     
-    // Reset composite operation
-    ctx.globalCompositeOperation = 'source-over';
+    // Generate pattern-based stars (40% of total)
+    const patternStarCount = starCount - randomStarCount;
+    this.createStarPatterns(starsGroup, patternStarCount);
+    
+    this.scene.add(starsGroup);
+    starsGroup.layers.set(0); // Make sure it doesn't get bloom
   }
   
-  // Add texture to nebula
-  addNebulaTexture(ctx, x, y, size) {
-    // Add noise/texture to the nebula
-    const noisePoints = Math.floor(size / 5);
+  createStarPatterns(group, count) {
+    // Distribute stars among different patterns
+    const patterns = ['cluster', 'arc', 'line'];
+    let remainingStars = count;
     
-    ctx.globalCompositeOperation = 'screen';
+    // Create 3-4 distinct patterns
+    const numPatterns = Math.floor(Math.random() * 2) + 3; // 3 to 4 patterns
     
-    for (let i = 0; i < noisePoints; i++) {
-      // Random position within nebula
+    for (let i = 0; i < numPatterns && remainingStars > 0; i++) {
+      const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+      const starsInPattern = Math.floor(remainingStars / (numPatterns - i));
+      remainingStars -= starsInPattern;
+      
+      // Random position for pattern center
+      const centerX = (Math.random() - 0.5) * this.gameWidth * 1.5;
+      const centerY = (Math.random() - 0.5) * this.gameHeight * 1.5;
+      
+      switch (pattern) {
+        case 'cluster':
+          this.createStarCluster(group, centerX, centerY, starsInPattern);
+          break;
+        case 'arc':
+          this.createStarArc(group, centerX, centerY, starsInPattern);
+          break;
+        case 'line':
+          this.createStarLine(group, centerX, centerY, starsInPattern);
+          break;
+      }
+    }
+  }
+  
+  createStarCluster(group, centerX, centerY, count) {
+    const radius = Math.random() * 50 + 30; // Cluster radius between 30 and 80
+    const densityFactor = Math.random() * 0.5 + 0.5; // Controls how dense the center is
+    
+    for (let i = 0; i < count; i++) {
+      // Use square root to create more density toward the center
+      const distance = Math.pow(Math.random(), densityFactor) * radius;
       const angle = Math.random() * Math.PI * 2;
-      const distance = Math.random() * size * 0.8;
-      const noiseX = x + Math.cos(angle) * distance;
-      const noiseY = y + Math.sin(angle) * distance;
       
-      // Random noise size
-      const noiseSize = Math.random() * 8 + 4;
+      const x = centerX + Math.cos(angle) * distance;
+      const y = centerY + Math.sin(angle) * distance;
       
-      // Create noise gradient
-      const noiseGradient = ctx.createRadialGradient(
-        noiseX, noiseY, 0,
-        noiseX, noiseY, noiseSize
-      );
+      // Stars closer to center are brighter and potentially larger
+      const centerProximity = 1 - (distance / radius);
+      const size = Math.random() * 2 + 1 + centerProximity * 1.5;
+      const brightness = Math.random() * 0.2 + 0.8 + centerProximity * 0.2;
       
-      // Randomize opacity based on distance from center
-      const opacity = 0.05 * (1 - distance/size);
-      
-      noiseGradient.addColorStop(0, `rgba(255, 255, 255, ${opacity})`);
-      noiseGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-      
-      // Draw noise point
-      ctx.fillStyle = noiseGradient;
-      ctx.beginPath();
-      ctx.arc(noiseX, noiseY, noiseSize, 0, Math.PI * 2);
-      ctx.fill();
+      const star = this.createStarPoint(x, y, size, brightness);
+      group.add(star);
     }
   }
   
-  // Create more realistic star distribution
-  addRealisticStarDistribution(ctx, width, height) {
-    // Reset composite operation
-    ctx.globalCompositeOperation = 'lighter';
+  createStarArc(group, centerX, centerY, count) {
+    const radius = Math.random() * 100 + 50; // Arc radius between 50 and 150
+    const arcLength = Math.random() * Math.PI + Math.PI / 2; // Between 90 and 270 degrees
+    const startAngle = Math.random() * Math.PI * 2;
     
-    // Create star clusters (Gaussian distribution)
-    const clusterCount = 8;
-    const totalStars = 2000;
-    
-    // Function to generate gaussian random value
-    const gaussianRandom = () => {
-      let u = 0, v = 0;
-      while (u === 0) u = Math.random();
-      while (v === 0) v = Math.random();
-      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-    };
-    
-    // Create clusters of stars
-    for (let c = 0; c < clusterCount; c++) {
-      // Cluster center
-      const centerX = Math.random() * width;
-      const centerY = Math.random() * height;
+    for (let i = 0; i < count; i++) {
+      const angle = startAngle + (arcLength * (i / (count - 1)));
       
-      // Cluster spread
-      const spreadX = width * (0.1 + Math.random() * 0.2);
-      const spreadY = height * (0.1 + Math.random() * 0.2);
+      // Add some randomness to the positions for a natural look
+      const distance = radius + (Math.random() - 0.5) * (radius * 0.2);
       
-      // Stars per cluster
-      const clusterStars = Math.floor(totalStars / clusterCount);
+      const x = centerX + Math.cos(angle) * distance;
+      const y = centerY + Math.sin(angle) * distance;
       
-      for (let i = 0; i < clusterStars; i++) {
-        // Use gaussian distribution for natural cluster appearance
-        const x = centerX + gaussianRandom() * spreadX;
-        const y = centerY + gaussianRandom() * spreadY;
-        
-        // Skip if outside canvas
-        if (x < 0 || x > width || y < 0 || y > height) continue;
-        
-        // Realistic star brightness distribution (most stars are dim, few are bright)
-        // Use power law distribution
-        const brightness = Math.pow(Math.random(), 3); // More small values
-        const radius = brightness * 1.5 + 0.2;
-        const opacity = brightness * 0.8 + 0.2;
-        
-        // Star color based on temperature (spectral class)
-        // Realistic distribution of star colors
-        const colorRoll = Math.random();
-        let starColor;
-        
-        if (colorRoll < 0.01) {
-          // O and B class (rare, very blue/white)
-          starColor = `rgba(200, 220, 255, ${opacity})`;
-        } else if (colorRoll < 0.1) {
-          // A class (white)
-          starColor = `rgba(240, 240, 255, ${opacity})`;
-        } else if (colorRoll < 0.3) {
-          // F class (yellowish white)
-          starColor = `rgba(255, 255, 240, ${opacity})`;
-        } else if (colorRoll < 0.6) {
-          // G class (yellow, like our sun)
-          starColor = `rgba(255, 255, 210, ${opacity})`;
-        } else if (colorRoll < 0.85) {
-          // K class (orange)
-          starColor = `rgba(255, 230, 180, ${opacity})`;
-        } else {
-          // M class (red)
-          starColor = `rgba(255, 200, 180, ${opacity})`;
-        }
-        
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = starColor;
-        ctx.fill();
-        
-        // Add glow to brighter stars
-        if (radius > 1) {
-          const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 4);
-          glow.addColorStop(0, `rgba(255, 255, 255, ${opacity * 0.3})`);
-          glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
-          
-          ctx.beginPath();
-          ctx.arc(x, y, radius * 4, 0, Math.PI * 2);
-          ctx.fillStyle = glow;
-          ctx.fill();
-          
-          // Add diffraction spikes to the brightest stars
-          if (radius > 1.2) {
-            this.addDiffractionSpikes(ctx, x, y, radius, opacity);
-          }
-        }
-      }
+      const size = Math.random() * 2.5 + 1;
+      const brightness = Math.random() * 0.3 + 0.7;
+      
+      const star = this.createStarPoint(x, y, size, brightness);
+      group.add(star);
     }
-    
-    // Add a few very bright stars across the entire field
-    const brightStarCount = 15;
-    for (let i = 0; i < brightStarCount; i++) {
-      const x = Math.random() * width;
-      const y = Math.random() * height;
-      const radius = 1.5 + Math.random() * 2;
-      const opacity = 0.8 + Math.random() * 0.2;
-      
-      // Brighter star with a stronger glow
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
-      ctx.fill();
-      
-      // Add bigger glow
-      const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 6);
-      glow.addColorStop(0, `rgba(255, 255, 255, ${opacity * 0.4})`);
-      glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
-      
-      ctx.beginPath();
-      ctx.arc(x, y, radius * 6, 0, Math.PI * 2);
-      ctx.fillStyle = glow;
-      ctx.fill();
-      
-      // Add diffraction spikes
-      this.addDiffractionSpikes(ctx, x, y, radius, opacity);
-    }
-    
-    // Reset composite operation
-    ctx.globalCompositeOperation = 'source-over';
   }
   
-  // Add diffraction spikes to bright stars
-  addDiffractionSpikes(ctx, x, y, radius, opacity) {
-    // Number of spikes (usually 4 for telescopes)
-    const spikeCount = 4;
-    const spikeLength = radius * (8 + Math.random() * 6);
+  createStarLine(group, centerX, centerY, count) {
+    const length = Math.random() * 150 + 50; // Line length between 50 and 200
+    const angle = Math.random() * Math.PI * 2; // Random orientation
     
-    ctx.save();
-    ctx.translate(x, y);
+    const startX = centerX - Math.cos(angle) * (length / 2);
+    const startY = centerY - Math.sin(angle) * (length / 2);
     
-    // Create spikes
-    for (let i = 0; i < spikeCount; i++) {
-      const angle = (i * Math.PI) / (spikeCount / 2);
+    for (let i = 0; i < count; i++) {
+      // Position along the line with some random offset
+      const progress = i / (count - 1);
+      const x = startX + Math.cos(angle) * (length * progress) + (Math.random() - 0.5) * 15;
+      const y = startY + Math.sin(angle) * (length * progress) + (Math.random() - 0.5) * 15;
       
-      ctx.save();
-      ctx.rotate(angle);
+      const size = Math.random() * 3 + 1;
+      const brightness = Math.random() * 0.3 + 0.7;
       
-      // Create gradient for spike
-      const gradient = ctx.createLinearGradient(0, 0, spikeLength, 0);
-      gradient.addColorStop(0, `rgba(255, 255, 255, ${opacity * 0.7})`);
-      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      const star = this.createStarPoint(x, y, size, brightness);
+      group.add(star);
+    }
+  }
+  
+  createStarPoint(x, y, size, brightness = 1.0) {
+    // Create a point sprite for the star
+    const material = new THREE.PointsMaterial({
+      size: size,
+      map: this.getStarTexture(),
+      transparent: true,
+      opacity: brightness,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([x, y, -50], 3));
+    
+    return new THREE.Points(geometry, material);
+  }
+  
+  getStarTexture() {
+    // Create and cache the star texture
+    if (!this.starTexture) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d');
       
-      // Draw spike
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(spikeLength, 0);
-      ctx.lineWidth = radius * 0.4;
-      ctx.strokeStyle = gradient;
-      ctx.stroke();
+      // Create a radial gradient for the star
+      const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+      gradient.addColorStop(0.5, 'rgba(240, 240, 255, 0.5)');
+      gradient.addColorStop(1, 'rgba(220, 220, 255, 0)');
       
-      ctx.restore();
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 32, 32);
+      
+      this.starTexture = new THREE.CanvasTexture(canvas);
     }
     
-    ctx.restore();
+    return this.starTexture;
   }
   
   createBlackHole() {
@@ -1352,6 +1279,11 @@ class Game {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     
+    // Update composer size if it exists
+    if (this.composer) {
+      this.composer.setSize(window.innerWidth, window.innerHeight);
+    }
+    
     // Update lens effect if it exists
     if (this.lensEffect) {
       this.lensEffect.onResize();
@@ -1385,15 +1317,15 @@ class Game {
       // Update lens effect with the latest black hole properties if available
       if (this.blackHole && this.lensEffect && !this.lensEffect.fallbackActive) {
         // Get the black hole's screen position and other properties
-        const props = this.blackHole.getLensEffectProperties();
+        const blackHoleProps = this.blackHole.getLensEffectProperties();
         
         // Update the lens effect with the latest black hole properties
-        this.lensEffect.update(props.screenPosition, props.mass, this.camera);
+        this.lensEffect.update(blackHoleProps.position, blackHoleProps.radius);
         
         // Let lens effect handle rendering with post-processing
         this.lensEffect.render();
       } else if (this.composer && typeof this.composer.render === 'function') {
-        // Use composer directly if lens effect not available
+        // Use composer directly if lens effect not available (uses our bloom effect)
         this.composer.render();
       } else {
         // Use standard renderer as fallback

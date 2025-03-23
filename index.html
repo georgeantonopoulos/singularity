@@ -69,8 +69,8 @@
         <div class="content">
             <h1>SINGULARITY</h1>
             <h2>Devour the Cosmos</h2>
-            <!-- Use both onclick and id to maximize chances of working -->
-            <button id="start-button" onclick="window.startGame()">Begin Consumption</button>
+            <!-- Remove onclick attribute to avoid conflicts with the event listeners in JS -->
+            <button id="start-button">Begin Consumption</button>
             <p>Use your mouse to move the black hole.<br>Devour smaller objects to grow your singularity.</p>
         </div>
     </div>
@@ -91,6 +91,16 @@
     window.addEventListener('error', function(e) {
         if (e.message.includes('Failed to resolve module')) {
             console.error('Module resolution error details:', e);
+        }
+    });
+    
+    // Add a fallback for starting the game
+    document.getElementById('start-button').addEventListener('click', function() {
+        console.log("Start button clicked via fallback event listener");
+        if (typeof window.startGame === 'function') {
+            window.startGame();
+        } else {
+            console.error("startGame function not found on window object");
         }
     });
     </script>

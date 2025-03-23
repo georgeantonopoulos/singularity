@@ -216,6 +216,11 @@ export class BlackHole {
     const duration = 1.8; 
     const startTime = performance.now() / 1000;
     
+    // Determine the "top" of the black hole relative to camera view
+    // In a top-down view, the up direction is considered the normal facing the camera
+    // We'll use the z-axis as the "up" direction in our 3D space
+    const upDirection = new THREE.Vector3(0, 0, 1);
+    
     // Create animation function
     const animateAbsorption = () => {
       // Calculate elapsed time
@@ -223,7 +228,7 @@ export class BlackHole {
       const elapsed = currentTime - startTime;
       const progress = Math.min(elapsed / duration, 1.0);
       
-      // Use easing function for smoother, more obvious spiral
+      // Use easing function for smoother spiral
       const easeProgress = 1 - Math.pow(1 - progress, 2); // Quadratic ease out
       
       // Get current black hole position and size - these may have changed since animation started
@@ -239,16 +244,15 @@ export class BlackHole {
       // Calculate scaling factor between initial and current black hole size
       const radiusRatio = currentBlackHoleRadius / initialBlackHoleRadius;
       
-      // Calculate new position - more dramatic spiral toward current black hole position
-      // More spiral rotations for better visibility
-      const angle = progress * Math.PI * 10; // Increase from 8 to 10 rotations
-      const spiralTightness = 0.9; // Tighter spiral
+      // Calculate spiral parameters
+      const angle = progress * Math.PI * 10; // 10 full rotations during the animation
+      const spiralTightness = 0.9;
       
       // Move toward current black hole position with spiral
       const distanceFactor = Math.pow(1 - easeProgress, 1.2); // Slower approach
       
       // Adjust the target position to account for black hole movement
-      const targetPosition = currentBlackHolePosition;
+      const targetPosition = currentBlackHolePosition.clone();
       
       // Adjust starting position to account for black hole movement
       const adjustedInitialPosition = new THREE.Vector3().addVectors(
@@ -256,23 +260,37 @@ export class BlackHole {
         blackHoleOffset.clone().multiplyScalar(0.5) // 50% follow black hole movement
       );
       
+      // Calculate position in the spiral plane (x-y)
       const spiralX = adjustedInitialPosition.x + (targetPosition.x - adjustedInitialPosition.x) * easeProgress;
       const spiralY = adjustedInitialPosition.y + (targetPosition.y - adjustedInitialPosition.y) * easeProgress;
       
-      // Add more pronounced spiral effect, scaled by black hole's current radius
+      // Add spiral effect in the x-y plane
       const scaledDistance = distance * radiusRatio;
       const spiralRadius = scaledDistance * distanceFactor * spiralTightness;
-      const finalX = spiralX + Math.cos(angle) * spiralRadius * (1 - easeProgress * 0.7); // Less dampening
-      const finalY = spiralY + Math.sin(angle) * spiralRadius * (1 - easeProgress * 0.7); // Less dampening
+      const finalX = spiralX + Math.cos(angle) * spiralRadius * (1 - easeProgress * 0.7);
+      const finalY = spiralY + Math.sin(angle) * spiralRadius * (1 - easeProgress * 0.7);
+      
+      // Calculate z-position - move object up slightly above the black hole during absorption
+      // This creates the effect of spiraling toward the "top" of the black hole
+      const initialZ = adjustedInitialPosition.z || 0;
+      const targetZ = targetPosition.z || 0;
+      
+      // Create a bell curve that peaks at the middle of the animation and returns near the end
+      const zOffset = Math.sin(progress * Math.PI) * currentBlackHoleRadius * 0.5;
+      const finalZ = initialZ + (targetZ - initialZ) * easeProgress + zOffset;
       
       // Update object position
-      object.position.set(finalX, finalY, object.position.z);
+      object.position.set(finalX, finalY, finalZ);
       object.mesh.position.copy(object.position);
       
       // Make objects stretch MORE as they approach the black hole center
       const stretchDirection = new THREE.Vector3()
         .subVectors(targetPosition, object.position)
         .normalize();
+      
+      // Add an upward component to the stretch direction for the "top" absorption effect
+      stretchDirection.z += upDirection.z * (1 - distanceFactor) * 0.5;
+      stretchDirection.normalize();
       
       // Calculate distance-based scaling to ensure planets stay visible
       const distToCenter = object.position.distanceTo(targetPosition);
@@ -289,11 +307,11 @@ export class BlackHole {
       const newScale = initialScale.clone().multiplyScalar(shrinkFactor);
       object.mesh.scale.copy(newScale);
       
-      // More dramatic stretching effect toward black hole center
-      // Scale stretching by black hole size
+      // More dramatic stretching effect toward black hole center and upward
       const stretchFactor = Math.min(5, 1 + (1 - shrinkFactor) * 6 * radiusRatio);
       object.mesh.scale.x *= (1 + stretchDirection.x * stretchFactor);
       object.mesh.scale.y *= (1 + stretchDirection.y * stretchFactor);
+      object.mesh.scale.z *= (1 + stretchDirection.z * stretchFactor * 1.5); // Extra stretching in the z direction
       
       // Keep opacity higher until very close to center
       let opacity = 1.0;
@@ -322,7 +340,7 @@ export class BlackHole {
         // Mark as fully absorbed
         object.isAbsorbed = true;
         
-        // Increase mass based on absorbed object (reduced from 3% to 2.5% for slower growth)
+        // Increase mass based on absorbed object
         this.increaseMass(object.mass * 0.025);
         
         // Call the callback if it exists
@@ -378,10 +396,9 @@ export class BlackHole {
   // Get properties needed for post-processing lens effect
   getLensEffectProperties() {
     return {
-      position: this.position.clone(),
-      radius: this.getRadius() * 1.2, // Reduce the lens effect radius
-      mass: this.mass,
-      screenPosition: this.getScreenPosition()
+      position: this.mesh.position.clone(), // 3D world position
+      radius: this.getRadius(),                  // Current radius in world units
+      mass: this.mass                       // Current mass value
     };
   }
 } 
