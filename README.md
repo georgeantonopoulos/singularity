@@ -10,6 +10,13 @@ Created by my son Christopher (6) who is really interested in black holes!
 - Beautiful cosmic visuals with stars, nebulae, and distortion effects
 - Grow your black hole by consuming celestial objects
 
+## Development Branches
+
+- **main**: Current stable version with orthographic camera (2D view)
+- **3D_cam**: Development branch for converting to a 3D perspective camera while maintaining gameplay
+
+For details on the 3D camera conversion approach, see the [3D_CAMERA_NOTES.md](3D_CAMERA_NOTES.md) file.
+
 ## Installation
 
 ### Local Development
