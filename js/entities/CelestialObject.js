@@ -497,6 +497,43 @@ export class CelestialObject {
       // Apply force to velocity (F = ma, so a = F/m)
       const acceleration = force.divideScalar(this.mass);
       
+      // Check for x-y alignment with black hole (key gameplay mechanic)
+      // Calculate x,y distance (ignoring z)
+      const xyDistance = Math.sqrt(
+        Math.pow(blackHole.position.x - this.position.x, 2) +
+        Math.pow(blackHole.position.y - this.position.y, 2)
+      );
+      
+      // Using same alignment threshold as in BlackHole.js
+      const maxAlignmentDistance = 15;
+      
+      // If well-aligned, add additional acceleration toward black hole
+      if (xyDistance < maxAlignmentDistance) {
+        // Calculate alignment precision (1.0 = perfect alignment)
+        const alignmentPrecision = 1.0 - (xyDistance / maxAlignmentDistance);
+        
+        // Direct vector to black hole
+        const dirToBlackHole = new THREE.Vector3().subVectors(blackHole.position, this.position).normalize();
+        
+        // Stronger z-axis pull when aligned for better 3D effect
+        // The z component of velocity should increase more rapidly when aligned
+        const zAlignmentFactor = Math.pow(alignmentPrecision, 2) * 4.0; // Up to 4x stronger z-pull
+        
+        // Create alignment acceleration boost
+        const alignmentAccelBoost = dirToBlackHole.clone().multiplyScalar(
+          deltaTime * Math.pow(alignmentPrecision, 2) * 0.5 // Stronger direct pull based on alignment
+        );
+        alignmentAccelBoost.z *= zAlignmentFactor; // Enhance z-component even more
+        
+        // Add the alignment-based boost directly to velocity
+        this.velocity.add(alignmentAccelBoost);
+        
+        // When very well aligned, log the active effect for debugging
+        if (alignmentPrecision > 0.8) {
+          console.log(`${this.type} experiencing strong alignment pull: ${(alignmentPrecision * 100).toFixed(1)}%`);
+        }
+      }
+      
       // For planets orbiting a star, scale down velocity changes
       // This helps maintain orbits until closer to the black hole
       if (this.parent && this.parent.type === OBJECT_TYPES.STAR) {
