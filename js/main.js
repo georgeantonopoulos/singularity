@@ -24,7 +24,8 @@ window.startGame = function() {
   }
 };
 
-class Game {
+// Make Game class globally available
+window.Game = class Game {
   constructor() {
     console.log("Game constructor started");
     this.canvas = document.getElementById('game-canvas');
@@ -1679,6 +1680,9 @@ document.addEventListener('DOMContentLoaded', () => {
         window.game.startGame();
       } else {
         console.error("Game instance not found!");
+        // Attempt to create the game if it doesn't exist
+        window.game = new Game();
+        window.game.startGame();
       }
     });
     
@@ -1690,6 +1694,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Debug output
   console.log("Start Button HTML:", document.getElementById('start-button')?.outerHTML);
   console.log("Window.startGame is:", typeof window.startGame);
+  console.log("Window.game is:", window.game ? "initialized" : "not initialized");
   
   // Add a global click handler for debugging
   document.addEventListener('click', (e) => {

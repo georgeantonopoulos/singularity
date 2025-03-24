@@ -28,19 +28,40 @@ window.startGame = function() {
           console.log("Final retry successful!");
           window.game.startGame();
         } else {
-          console.error("Game instance still not available after final delay.");
-          alert("Error starting game. Please refresh the page and try again.");
+          console.log("Game instance still not available after final delay.");
           
           // Emergency: Create a new game instance if all else fails
           try {
             console.log("Emergency: attempting to create a new game instance...");
-            // This requires the Game class to be globally available
-            if (typeof Game === 'function') {
+            // Look for Game class, first on window, then as global
+            if (typeof window.Game === 'function') {
+              console.log("Found Game class on window object");
+              window.game = new window.Game();
+              window.game.startGame();
+            } else if (typeof Game === 'function') {
+              console.log("Found Game class as global");
               window.game = new Game();
               window.game.startGame();
+            } else {
+              console.error("Game class not found! Waiting for script to load...");
+              
+              // Wait for main.js to load completely
+              document.addEventListener('DOMContentLoaded', () => {
+                console.log("DOM fully loaded, final attempt to start game");
+                if (window.game) {
+                  window.game.startGame();
+                } else if (typeof window.Game === 'function') {
+                  window.game = new window.Game();
+                  window.game.startGame();
+                } else {
+                  console.error("Unable to start game. Please refresh the page.");
+                  alert("Error starting game. Please refresh the page and try again.");
+                }
+              });
             }
           } catch (e) {
             console.error("Emergency game creation failed:", e);
+            alert("Error starting game. Please refresh the page and try again.");
           }
         }
       }, 1000);
