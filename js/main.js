@@ -1027,8 +1027,8 @@ window.Game = class Game {
       let x, y, z;
       let distance;
       
-      // Add slight z variation for 3D effect (-10 to 10)
-      z = (Math.random() - 0.5) * 20;
+      // Add enhanced z variation for stronger 3D effect (-20 to 20)
+      z = (Math.random() - 0.5) * 40;
       
       // Create a better distribution of objects across the play area
       const distributionMethod = Math.random();
@@ -1047,8 +1047,8 @@ window.Game = class Game {
         x = Math.cos(angle) * ringRadius;
         y = Math.sin(angle) * ringRadius;
         
-        // Add slight z variation for ring tilt (creating a subtle 3D orbital plane)
-        const ringTilt = Math.random() * 0.2; // Small tilt factor
+        // Add stronger z variation for 3D orbital plane tilt
+        const ringTilt = Math.random() * 0.4; // Increased tilt factor
         z = Math.sin(angle) * ringRadius * ringTilt;
         
         distance = ringRadius;
@@ -1100,9 +1100,9 @@ window.Game = class Game {
       const radialDx = Math.cos(angle) * radialComponent;
       const radialDy = Math.sin(angle) * radialComponent;
       
-      // Add a small z-component for subtle vertical movement
-      // Keep it very small to avoid objects heading toward the camera
-      const dz = (Math.random() - 0.5) * 0.2;
+      // Add more significant z-component for noticeable vertical movement
+      // Larger range for more visible 3D effect
+      const dz = (Math.random() - 0.5) * 0.5;
       
       object.velocity = new THREE.Vector3(dx + radialDx, dy + radialDy, dz);
       
@@ -1414,8 +1414,8 @@ window.Game = class Game {
       const distanceVariation = 0.2; // Allow objects to appear deeper into the play area
       let x, y, z;
       
-      // Add subtle z-depth for 3D effect (-10 to 10)
-      z = (Math.random() - 0.5) * 20;
+      // Add enhanced z-depth for more pronounced 3D effect (-20 to 20)
+      z = (Math.random() - 0.5) * 40;
       
       switch (side) {
         case 0: // top
@@ -1449,9 +1449,9 @@ window.Game = class Game {
       const dx = Math.cos(centerAngle + angleVariation) * speed;
       const dy = Math.sin(centerAngle + angleVariation) * speed;
       
-      // Add very subtle z velocity component for gentle 3D movement
-      // Keep it small to avoid objects heading directly toward the camera
-      const dz = (Math.random() - 0.5) * 0.1;
+      // Add more significant z velocity component for noticeable 3D movement
+      // Increased magnitude for more visible effect
+      const dz = (Math.random() - 0.5) * 0.3;
       
       object.velocity = new THREE.Vector3(dx, dy, dz);
       

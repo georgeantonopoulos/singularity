@@ -478,18 +478,20 @@ export class CelestialObject {
     // Update mesh position
     this.mesh.position.x = this.position.x;
     this.mesh.position.y = this.position.y;
+    this.mesh.position.z = this.position.z; // Make sure to update z position
     
     // Add vertical oscillation based on type and time
+    // We'll make this much more subtle since we're now using actual z-position
     if (!this.isAbsorbed) {
       const time = performance.now() * 0.001;
       let zOffset = 0;
       
       if (this.type === OBJECT_TYPES.STAR) {
-        // Slower, more subtle oscillation for stars
-        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude;
+        // Very subtle oscillation for stars
+        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude * 0.5;
       } else {
-        // More pronounced oscillation for planets and debris 
-        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude * 1.5;
+        // Slightly more pronounced oscillation for planets and debris 
+        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude * 0.8;
         
         // Add some randomness to planet orbits in z-axis
         if (Math.random() < 0.005) { // Occasional slight z-velocity changes
@@ -497,7 +499,8 @@ export class CelestialObject {
         }
       }
       
-      this.mesh.position.z = zOffset;
+      // Add the oscillation to the actual z-position
+      this.mesh.position.z += zOffset;
     }
     
     // Apply rotation
