@@ -217,10 +217,23 @@ export class BlackHole {
     const duration = 1.8; 
     const startTime = performance.now() / 1000;
     
-    // Determine the "top" of the black hole relative to camera view
-    // In a top-down view, the up direction is considered the normal facing the camera
-    // We'll use the z-axis as the "up" direction in our 3D space
-    const upDirection = new THREE.Vector3(0, 0, 1);
+    // Determine the "up" vector for the spiraling animation
+    // Use a combination of camera direction and black hole position
+    // This ensures the spiral is visible from the player's perspective
+    const upVector = new THREE.Vector3(0, 0, 1);
+    
+    // Get vector from object to black hole for the spiral plane
+    const objectToBlackHole = new THREE.Vector3().subVectors(
+      this.position,
+      initialPosition
+    ).normalize();
+    
+    // Create a right vector perpendicular to up and object-to-blackhole
+    const rightVector = new THREE.Vector3().crossVectors(upVector, objectToBlackHole).normalize();
+    
+    // Create a new up vector that's perpendicular to object-to-blackhole and right
+    // This ensures our spiral plane is properly oriented in 3D space
+    const spiralUpVector = new THREE.Vector3().crossVectors(objectToBlackHole, rightVector).normalize();
     
     // Create animation function
     const animateAbsorption = () => {
@@ -228,6 +241,10 @@ export class BlackHole {
       const currentTime = performance.now() / 1000;
       const elapsed = currentTime - startTime;
       const progress = Math.min(elapsed / duration, 1.0);
+      
+      // Calculate delta time for smooth rotation regardless of frame rate
+      const deltaTime = Math.min(0.1, elapsed - (animateAbsorption.lastTime || 0));
+      animateAbsorption.lastTime = elapsed;
       
       // Use easing function for smoother spiral
       const easeProgress = 1 - Math.pow(1 - progress, 2); // Quadratic ease out
@@ -249,109 +266,87 @@ export class BlackHole {
       const angle = progress * Math.PI * 10; // 10 full rotations during the animation
       const spiralTightness = 0.9;
       
-      // Move toward current black hole position with spiral
-      const distanceFactor = Math.pow(1 - easeProgress, 1.2); // Slower approach
+      // Get the object's initial distance to update spiral properly
+      const initialDist = initialPosition.distanceTo(initialBlackHolePosition);
       
-      // Adjust the target position to account for black hole movement
-      const targetPosition = currentBlackHolePosition.clone();
+      // Calculate current distance from the center, getting smaller as animation progresses
+      const currentDist = initialDist * (1 - easeProgress);
       
-      // Adjust starting position to account for black hole movement
-      const adjustedInitialPosition = new THREE.Vector3().addVectors(
+      // Calculate position on the spiral in the plane perpendicular to the black hole direction
+      // This creates a true 3D spiral effect now
+      
+      // Calculate the position along the spiral
+      // Start at the initial position and spiral inward toward the black hole
+      
+      // Calculate the spiral components
+      const spiralX = Math.cos(angle) * currentDist * spiralTightness;
+      const spiralY = Math.sin(angle) * currentDist * spiralTightness;
+      
+      // Create vectors for the spiral plane
+      const tangentVector = rightVector.clone().multiplyScalar(spiralX);
+      const normalVector = spiralUpVector.clone().multiplyScalar(spiralY);
+      
+      // Calculate intermediate point between object and black hole
+      const midPoint = new THREE.Vector3().lerpVectors(
         initialPosition,
-        blackHoleOffset.clone().multiplyScalar(0.5) // 50% follow black hole movement
+        currentBlackHolePosition,
+        easeProgress
       );
       
-      // Calculate position in the spiral plane (x-y)
-      const spiralX = adjustedInitialPosition.x + (targetPosition.x - adjustedInitialPosition.x) * easeProgress;
-      const spiralY = adjustedInitialPosition.y + (targetPosition.y - adjustedInitialPosition.y) * easeProgress;
+      // Add spiral offset to the midpoint
+      const newPosition = midPoint.clone()
+        .add(tangentVector)
+        .add(normalVector);
       
-      // Add spiral effect in the x-y plane
-      const scaledDistance = distance * radiusRatio;
-      const spiralRadius = scaledDistance * distanceFactor * spiralTightness;
-      const finalX = spiralX + Math.cos(angle) * spiralRadius * (1 - easeProgress * 0.7);
-      const finalY = spiralY + Math.sin(angle) * spiralRadius * (1 - easeProgress * 0.7);
+      // Update the object's position
+      object.position.copy(newPosition);
+      object.mesh.position.copy(newPosition);
       
-      // Calculate z-position - move object up slightly above the black hole during absorption
-      // This creates the effect of spiraling toward the "top" of the black hole
-      const initialZ = adjustedInitialPosition.z || 0;
-      const targetZ = targetPosition.z || 0;
+      // Scale down as the object gets closer to the black hole
+      const currentScale = 1 - easeProgress * 0.8;
+      object.mesh.scale.set(currentScale, currentScale, currentScale);
       
-      // Create a bell curve that peaks at the middle of the animation and returns near the end
-      const zOffset = Math.sin(progress * Math.PI) * currentBlackHoleRadius * 0.5;
-      const finalZ = initialZ + (targetZ - initialZ) * easeProgress + zOffset;
+      // Add rotation effect for more dramatic animation
+      const rotationSpeed = 5.0;
+      object.mesh.rotation.x += rotationSpeed * deltaTime;
+      object.mesh.rotation.y += rotationSpeed * deltaTime;
+      object.mesh.rotation.z += rotationSpeed * deltaTime;
       
-      // Update object position
-      object.position.set(finalX, finalY, finalZ);
-      object.mesh.position.copy(object.position);
-      
-      // Make objects stretch MORE as they approach the black hole center
-      const stretchDirection = new THREE.Vector3()
-        .subVectors(targetPosition, object.position)
-        .normalize();
-      
-      // Add an upward component to the stretch direction for the "top" absorption effect
-      stretchDirection.z += upDirection.z * (1 - distanceFactor) * 0.5;
-      stretchDirection.normalize();
-      
-      // Calculate distance-based scaling to ensure planets stay visible
-      const distToCenter = object.position.distanceTo(targetPosition);
-      const scaledBlackHoleRadius = currentBlackHoleRadius;
-
-      // Only start shrinking when closer to the center, scaled by black hole size
-      let shrinkFactor = 1.0;
-      if (distToCenter < scaledBlackHoleRadius * 2.5) {
-        shrinkFactor = distToCenter / (scaledBlackHoleRadius * 2.5);
-        shrinkFactor = Math.max(0.4, shrinkFactor); // Don't shrink below 40%
-      }
-      
-      // Keep objects larger than before
-      const newScale = initialScale.clone().multiplyScalar(shrinkFactor);
-      object.mesh.scale.copy(newScale);
-      
-      // More dramatic stretching effect toward black hole center and upward
-      const stretchFactor = Math.min(5, 1 + (1 - shrinkFactor) * 6 * radiusRatio);
-      object.mesh.scale.x *= (1 + stretchDirection.x * stretchFactor);
-      object.mesh.scale.y *= (1 + stretchDirection.y * stretchFactor);
-      object.mesh.scale.z *= (1 + stretchDirection.z * stretchFactor * 1.5); // Extra stretching in the z direction
-      
-      // Keep opacity higher until very close to center
-      let opacity = 1.0;
-      if (distToCenter < scaledBlackHoleRadius) {
-        // Scale opacity threshold by black hole size
-        opacity = distToCenter / scaledBlackHoleRadius;
-      }
-      
-      // Fade out as it's absorbed, but more gradually
-      if (object.mesh.material) {
-        if (object.mesh.material.opacity !== undefined) {
-          object.mesh.material.opacity = opacity;
-          // Ensure transparent is enabled if we're modifying opacity
-          object.mesh.material.transparent = true;
-        } else if (object.mesh.material.uniforms && object.mesh.material.uniforms.opacity) {
-          object.mesh.material.uniforms.opacity.value = opacity;
-          // Ensure transparent is enabled
-          object.mesh.material.transparent = true;
-        }
-      }
-      
-      // Check if animation is complete
-      if (progress < 1.0 && !object.isAbsorbed) {
-        requestAnimationFrame(animateAbsorption);
-      } else {
-        // Mark as fully absorbed
+      // If animation is complete
+      if (progress >= 1.0) {
+        // Mark object as absorbed
         object.isAbsorbed = true;
         
-        // Increase mass based on absorbed object
-        this.increaseMass(object.mass * 0.025);
+        // Update black hole mass - scale factor based on object type
+        // Use MUCH smaller percentages of object mass (similar to original 2.5%)
+        let massFactor = 0.025; // Default/baseline factor (same as original)
         
-        // Call the callback if it exists
+        // Differentiate absorption by object type with small adjustments
+        if (object.type === 'star') {
+          // Stars provide slightly more than the default
+          massFactor = 0.03;
+        } else if (object.type === 'planet') {
+          // Planets provide the default amount
+          massFactor = 0.025;
+        } else if (object.type === 'debris') {
+          // Debris provides slightly less than the default
+          massFactor = 0.02;
+        }
+        
+        // Increment black hole mass
+        this.increaseMass(object.mass * massFactor);
+        
+        // Trigger any object-absorbed callbacks
         if (this.onObjectAbsorbed) {
           this.onObjectAbsorbed(object);
         }
+      } else {
+        // Continue animation on next frame
+        requestAnimationFrame(animateAbsorption);
       }
     };
     
-    // Start animation
+    // Start the animation
     animateAbsorption();
   }
   
