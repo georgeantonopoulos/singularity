@@ -20,6 +20,23 @@ export class CelestialObject {
     this._oscSpeed = 0.5 + Math.random() * 0.5; // Random oscillation speed
     this._oscAmplitude = 0.2 + Math.random() * 0.3; // Random oscillation amplitude
     
+    // New properties for hierarchical orbital dynamics
+    this.parent = options.parent || null;
+    this.children = [];
+    this.orbitalRadius = options.orbitalRadius || 0;
+    this.orbitalSpeed = options.orbitalSpeed || 0;
+    this.orbitalPhase = options.orbitalPhase || Math.random() * Math.PI * 2;
+    this.orbitalInclination = options.orbitalInclination || (Math.random() * 0.2);
+    
+    if (this.parent && this.parent instanceof CelestialObject) {
+      this.parent.children.push(this);
+    }
+    
+    // Set initial position from options if provided
+    if (options.position && options.position instanceof THREE.Vector3) {
+      this.position.copy(options.position);
+    }
+    
     this.createMesh();
   }
   
@@ -349,6 +366,25 @@ export class CelestialObject {
     return Math.pow(this.mass, 1/3) * 0.8;
   }
   
+  // New method for orbital movement
+  updateOrbit(deltaTime) {
+    if (!this.parent) return;
+    
+    // Update orbital position around parent
+    this.orbitalPhase += this.orbitalSpeed * deltaTime;
+    
+    // Calculate new position based on orbit
+    const x = this.parent.position.x + Math.cos(this.orbitalPhase) * this.orbitalRadius;
+    const y = this.parent.position.y + Math.sin(this.orbitalPhase) * this.orbitalRadius;
+    
+    // Add inclination effect for 3D-like orbits
+    const z = Math.sin(this.orbitalPhase) * this.orbitalRadius * this.orbitalInclination;
+    
+    // Update position
+    this.position.set(x, y, z);
+    this.mesh.position.copy(this.position);
+  }
+  
   update(deltaTime, blackHole, allObjects) {
     if (this.isAbsorbed) return;
     
@@ -394,6 +430,17 @@ export class CelestialObject {
       
       // Apply force to velocity (F = ma, so a = F/m)
       const acceleration = force.divideScalar(this.mass);
+      
+      // For planets orbiting a star, scale down velocity changes
+      // This helps maintain orbits until closer to the black hole
+      if (this.parent && this.parent.type === OBJECT_TYPES.STAR) {
+        // Scale based on distance to black hole vs orbital radius
+        const distToBlackHole = this.position.distanceTo(blackHole.position);
+        const stabilityFactor = Math.min(1, (this.orbitalRadius * 2) / distToBlackHole);
+        
+        // Apply stability - farther from black hole = more stable orbits
+        this.velocity.multiplyScalar(0.7 + 0.3 * stabilityFactor);
+      }
       
       // Apply a minimum acceleration to ensure objects don't stall in space
       const minAccelerationMagnitude = 0.05;
@@ -510,6 +557,13 @@ export class CelestialObject {
           if (this.starPlanes.length > 3) this.starPlanes[3].rotation.x -= deltaTime * 0.02;
         }
       }
+    }
+    
+    // Update any children objects if needed
+    if (this.children.length > 0) {
+      this.children.forEach(child => {
+        child.updateOrbit(deltaTime);
+      });
     }
   }
   

@@ -6,6 +6,7 @@ import { setupLighting } from './utils/lighting.js';
 import { createStarfield } from './utils/starfield.js';
 import { lensPostProcessingVertexShader, lensPostProcessingFragmentShader } from './shaders/blackHoleShaders.js';
 import { BlackHoleLensEffect } from './libs/BlackHoleLensEffect.js';
+import { GalaxyCluster } from './entities/GalaxyCluster.js';
 
 // At the top of the file, after imports
 console.log("Main.js loaded with ES6 modules");
@@ -45,6 +46,7 @@ class Game {
     // Game state
     this.isRunning = false;
     this.celestialObjects = [];
+    this.galaxyClusters = [];
     this.gameTimeInSeconds = Infinity; // No time limit
     this.timeRemaining = this.gameTimeInSeconds;
     this.frameCount = 0; // Counter for frame-based operations
@@ -1307,7 +1309,7 @@ class Game {
         }
         
         // Update object position based on gravitational pull
-        object.update(deltaTime, this.blackHole, this.celestialObjects);
+        object.update(deltaTime, this.blackHole);
         
         // Update trajectory line if it exists
         if (object.trajectoryLine && !object.isAbsorbed && this.blackHole) {
