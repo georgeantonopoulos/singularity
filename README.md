@@ -1,7 +1,7 @@
-# Singularity - A Cosmic Feast Game
+# Christopher's Singularity - A Cosmic Feast Game
 
 A physics-based game where you control a black hole and consume celestial objects to grow.
-Created by my son Christopher who is really interested in black holes! 
+Created by my son Christopher (6) who is really interested in black holes! 
 
 ## Features
 
