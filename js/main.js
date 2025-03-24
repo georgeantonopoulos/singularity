@@ -167,7 +167,13 @@ window.Game = class Game {
         // Use a smaller lerp factor for slower movement
         const slowLerpFactor = this.lerpFactor * 0.3; // Half the original speed
         this.blackHole.position.lerp(this.targetPosition, slowLerpFactor);
-        this.blackHole.mesh.position.copy(this.blackHole.position);
+        
+        // Update the visual representation (group or mesh)
+        if (this.blackHole.group) {
+          this.blackHole.group.position.copy(this.blackHole.position);
+        } else if (this.blackHole.mesh) {
+          this.blackHole.mesh.position.copy(this.blackHole.position);
+        }
       }
     }
     
@@ -670,8 +676,12 @@ window.Game = class Game {
   
   createBlackHole() {
     // Clean up any existing black hole first
-    if (this.blackHole && this.blackHole.mesh) {
-      this.scene.remove(this.blackHole.mesh);
+    if (this.blackHole) {
+      if (this.blackHole.group) {
+        this.scene.remove(this.blackHole.group);
+      } else if (this.blackHole.mesh) {
+        this.scene.remove(this.blackHole.mesh);
+      }
       this.blackHole = null;
     }
     
@@ -700,13 +710,15 @@ window.Game = class Game {
     
     // Position the black hole at center initially
     this.blackHole.position = new THREE.Vector3(0, 0, 0);
-    this.blackHole.mesh.position.copy(this.blackHole.position);
     
-    // Ensure black hole is visible with proper 3D appearance
-    this.blackHole.mesh.scale.set(0.7, 0.7, 0.7); // Start much smaller (was 1,1,1)
-    
-    // Add the black hole to the scene
-    this.scene.add(this.blackHole.mesh);
+    // Add the black hole to the scene - use the group if available, otherwise use mesh
+    if (this.blackHole.group) {
+      this.blackHole.group.position.copy(this.blackHole.position);
+      this.scene.add(this.blackHole.group);
+    } else if (this.blackHole.mesh) {
+      this.blackHole.mesh.position.copy(this.blackHole.position);
+      this.scene.add(this.blackHole.mesh);
+    }
     
     // Set up lens effect - this is now using a fallback renderer
     this.setupLensEffect();
@@ -1195,7 +1207,9 @@ window.Game = class Game {
     
     // Remove black hole
     if (this.blackHole) {
-      if (this.blackHole.mesh) {
+      if (this.blackHole.group) {
+        this.scene.remove(this.blackHole.group);
+      } else if (this.blackHole.mesh) {
         this.scene.remove(this.blackHole.mesh);
       }
       this.blackHole = null;
@@ -1554,10 +1568,10 @@ window.Game = class Game {
     this.basicRendererActive = true;
     
     // Ensure we can see the black hole even without post-processing
-    if (this.blackHole && this.blackHole.mesh) {
+    if (this.blackHole) {
       console.log("Setting up basic black hole visualization");
       
-      // Check if material exists before trying to set opacity
+      // Check if event horizon exists and has material
       if (this.blackHole.eventHorizon && this.blackHole.eventHorizon.material) {
         // Make sure the black hole's event horizon is visible but still partially transparent
         this.blackHole.eventHorizon.material.opacity = 0.85;

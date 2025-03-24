@@ -385,6 +385,72 @@ export class CelestialObject {
     this.mesh.position.copy(this.position);
   }
   
+  // Add this method to the CelestialObject class to visually represent z-position
+  updateDepthVisuals() {
+    if (!this.mesh) return;
+    
+    // Get the z-position of the object relative to camera (assuming camera is at z=0 looking towards negative z)
+    const zPosition = this.position.z;
+    const baseZ = 0; // Base camera position 
+    const maxDistance = 100; // Maximum visual distance effect
+    
+    // Calculate visual scale factor based on distance
+    // Objects closer to camera (positive z) appear larger, objects further (negative z) appear smaller
+    let scaleFactor = 1.0;
+    
+    // Calculate distance from base z position
+    const distance = Math.abs(zPosition - baseZ);
+    
+    if (zPosition > baseZ) {
+      // Object is closer to camera (in front)
+      scaleFactor = 1.0 + Math.min(distance / maxDistance, 0.4); // Up to 40% larger
+    } else {
+      // Object is further from camera (behind)
+      scaleFactor = 1.0 - Math.min(distance / maxDistance, 0.3); // Up to 30% smaller
+    }
+    
+    // Apply the scale factor to visual size only (not collision size)
+    this.mesh.scale.set(scaleFactor, scaleFactor, scaleFactor);
+    
+    // For stars, adjust brightness based on z-position
+    if (this.type === 'star') {
+      // Make stars in front slightly brighter, stars behind slightly dimmer
+      let brightnessAdjustment = 1.0;
+      
+      if (zPosition > baseZ) {
+        // Star is closer - brighter
+        brightnessAdjustment = 1.0 + Math.min(distance / maxDistance, 0.5); // Up to 50% brighter
+      } else {
+        // Star is further - dimmer
+        brightnessAdjustment = 1.0 - Math.min(distance / maxDistance, 0.4); // Up to 40% dimmer
+      }
+      
+      // Apply to material emissive intensity if it exists
+      if (this.mesh.material && this.mesh.material.emissiveIntensity !== undefined) {
+        // Store original value if not already stored
+        if (this._originalEmissiveIntensity === undefined) {
+          this._originalEmissiveIntensity = this.mesh.material.emissiveIntensity;
+        }
+        
+        // Apply adjustment
+        this.mesh.material.emissiveIntensity = this._originalEmissiveIntensity * brightnessAdjustment;
+      }
+      
+      // Apply to star components if they exist
+      if (this.glowMesh && this.glowMesh.material) {
+        // Store original opacity if not already stored
+        if (this._originalGlowOpacity === undefined && this.glowMesh.material.opacity !== undefined) {
+          this._originalGlowOpacity = this.glowMesh.material.opacity;
+        }
+        
+        // Apply adjustment if we have stored the original
+        if (this._originalGlowOpacity !== undefined) {
+          this.glowMesh.material.opacity = this._originalGlowOpacity * brightnessAdjustment;
+        }
+      }
+    }
+  }
+  
   update(deltaTime, blackHole, allObjects) {
     if (this.isAbsorbed) return;
     
@@ -464,6 +530,14 @@ export class CelestialObject {
         this.velocity.add(perpDirection.multiplyScalar(0.1));
       }
       
+      // Enhance z-axis movement toward/away from black hole for better 3D effect
+      // Add a small component of the gravitational pull in the z-direction
+      const distanceToBlackHole = this.position.distanceTo(blackHole.position);
+      const zFactor = 0.2 * (this.position.z - blackHole.position.z) / distanceToBlackHole;
+      
+      // Adjust velocity to enhance z-movement toward black hole
+      acceleration.z += zFactor;
+      
       this.velocity.add(acceleration.multiplyScalar(deltaTime));
     }
     
@@ -502,6 +576,9 @@ export class CelestialObject {
       // Add the oscillation to the actual z-position
       this.mesh.position.z += zOffset;
     }
+    
+    // Update visual cues for depth
+    this.updateDepthVisuals();
     
     // Apply rotation
     if (this.mesh) {
