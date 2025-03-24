@@ -149,6 +149,34 @@ export class BlackHole {
       return new THREE.Vector3(0, 0, 0);
     }
     
+    // Calculate x,y alignment factor (how well the black hole is aligned with the object)
+    // This is the key gameplay mechanic - alignment increases gravitational pull
+    const xyDistance = Math.sqrt(
+      Math.pow(this.position.x - objectPosition.x, 2) +
+      Math.pow(this.position.y - objectPosition.y, 2)
+    );
+    const zDistance = Math.abs(this.position.z - objectPosition.z);
+    
+    // Calculate alignment factor - higher when xy-distance is small compared to z-distance
+    // Using a much wider detection radius - similar to the visual indicator in main.js
+    const maxAlignmentDistance = 15; // Significantly increased to match the wider detection in main.js
+    let alignmentFactor = 1.0; // Default/minimum factor
+    
+    if (xyDistance < maxAlignmentDistance) {
+      // Calculate alignment precision - 1.0 is perfect alignment, 0.0 is no alignment
+      const alignmentPrecision = 1.0 - (xyDistance / maxAlignmentDistance);
+      
+      // Exponential curve for stronger effect at better alignment
+      // Significantly increased multiplier (from 3.0 to 5.0) for stronger gravitational effect
+      const alignmentBoost = Math.pow(alignmentPrecision, 2) * 100.0; // Up to 5x stronger pull when perfectly aligned
+      alignmentFactor = 1.0 + alignmentBoost;
+      
+      // Debug log when strong alignment is detected
+      if (alignmentFactor > 3.0) {
+        console.log(`Very strong alignment (${alignmentFactor.toFixed(2)}x) with object at xy-distance: ${xyDistance.toFixed(2)}`);
+      }
+    }
+    
     // Calculate force magnitude using modified gravitational formula
     let forceMagnitude;
     
@@ -159,6 +187,9 @@ export class BlackHole {
       // This creates a "point of no return" effect
       const proximityFactor = 1.0 - Math.pow(distance / eventHorizonRadius, 2);
       forceMagnitude = this.gravitationalConstant * this.mass * objectMass * (2.0 + 8.0 * proximityFactor) / (distance * distance);
+      
+      // Apply alignment factor here too for consistent behavior
+      forceMagnitude *= alignmentFactor;
     } else {
       // Normal gravitational force for further objects
       // F = G * (m1 * m2) / r^2 with distance-based blending to linear falloff
@@ -167,6 +198,9 @@ export class BlackHole {
       let t = (distance - 30) / 20;
       t = Math.max(0, Math.min(1, t));
       forceMagnitude = (1 - t) * invSquare + t * invLinear;
+      
+      // Apply alignment factor to normal gravitational force
+      forceMagnitude *= alignmentFactor;
     }
     
     // Ensure minimum force magnitude that scales with object mass
@@ -180,16 +214,21 @@ export class BlackHole {
     
     // Calculate z-component force factor
     // This enhances the z-axis pull to make depth movement more visible
-    const zDistance = Math.abs(this.position.z - objectPosition.z);
-    const xyDistance = Math.sqrt(
-      Math.pow(this.position.x - objectPosition.x, 2) +
-      Math.pow(this.position.y - objectPosition.y, 2)
-    );
-    
-    // Enhance z-force when objects are roughly aligned with black hole on x-y plane
-    // but at different z-depths (this creates a more dramatic "pulling into" effect)
     let zForceFactor = 1.0;
-    if (xyDistance < this.getRadius() * 3 && zDistance > 5) {
+    
+    // Enhance z-force based on alignment - key gameplay aspect
+    // When aligned, we want to rapidly pull the object along the z-axis
+    if (xyDistance < maxAlignmentDistance) {
+      // Stronger z-force when aligned, scales with alignment precision
+      const alignmentPrecision = 1.0 - (xyDistance / maxAlignmentDistance);
+      
+      // Significantly increased z-force multiplier (from 3.0 to 6.0) for more dramatic z-movement when aligned
+      const zAlignmentBoost = 1.0 + Math.pow(alignmentPrecision, 2) * 6.0; // Up to 7x z-force when perfectly aligned
+      
+      zForceFactor = Math.max(zForceFactor, zAlignmentBoost);
+    } 
+    // Also keep the previous z-force enhancement for objects at different depths
+    else if (xyDistance < this.getRadius() * 3 && zDistance > 5) {
       // Object is aligned with black hole in x-y plane but at different z-depth
       // Enhance z-force to create more visible depth movement
       zForceFactor = 2.0 + Math.min(zDistance / 30, 2.0);
@@ -281,19 +320,27 @@ export class BlackHole {
     // Significantly increased absorption radius for more aggressive capture
     const absorptionRadius = this.getRadius() * 6 + celestialObject.getRadius();
     
+    // Calculate z-factor to adjust absorption radius based on z-position
+    // Objects further away in z-space should be harder to absorb
+    const zFactor = Math.max(0.8, 1.0 - (zDistance / 50));
+    
     // For objects behind the black hole (negative z), use a larger absorption radius
     // to compensate for perspective foreshortening
-    let adjustedAbsorptionRadius = absorptionRadius;
+    let adjustedAbsorptionRadius = absorptionRadius * zFactor;
     if (celestialObject.position.z < this.position.z) {
       // Object is behind the black hole, increase absorption radius proportionally
-      adjustedAbsorptionRadius *= (1 + Math.min(zDistance/30, 1.0));
+      // but with a more gradual falloff based on z-distance
+      adjustedAbsorptionRadius *= (1 + Math.min(zDistance/40, 0.8));
     }
     
     // More lenient absorption check - if objects are close in x-y plane OR close in 3D space
-    const maxZAbsorption = this.getRadius() * 10; // Much larger z-range for absorption
+    // Adjust max Z absorption range based on black hole size for better scaling
+    const maxZAbsorption = this.getRadius() * 8; // Slightly reduced z-range for more realistic absorption
     
     // Check if object should be absorbed based on either x-y distance or full 3D distance
-    if (xyDistance <= adjustedAbsorptionRadius || distance <= absorptionRadius * 1.5) {
+    // Use a weighted approach that considers both xy-distance and z-distance
+    if ((xyDistance <= adjustedAbsorptionRadius && zDistance <= maxZAbsorption * 1.2) || 
+        distance <= absorptionRadius * 1.3) {
       // For objects not aligned in xy-plane, use more relaxed z-distance check
       if (zDistance <= maxZAbsorption) {
         console.log(`Object absorption started! Type: ${celestialObject.type}, Mass: ${celestialObject.mass.toFixed(2)}, Distance: ${distance.toFixed(2)}, Z-distance: ${zDistance.toFixed(2)}`);
@@ -312,150 +359,68 @@ export class BlackHole {
     // Don't re-absorb objects
     if (object.isBeingAbsorbed || object.isAbsorbed) return;
     
-    // Mark object as being absorbed so we don't trigger this again
+    // Mark object as being absorbed
     object.isBeingAbsorbed = true;
     
-    // Store initial properties for animation
-    const initialScale = object.mesh.scale.clone();
-    const initialPosition = object.position.clone();
-    const initialBlackHolePosition = this.position.clone();
-    const initialBlackHoleRadius = this.getRadius();
+    // Set start position at current position
+    const startPos = object.position.clone();
     
-    // Duration of animation in seconds - make it longer for better visibility
-    const duration = 1.8; 
-    const startTime = performance.now() / 1000;
+    // Set a fixed duration
+    const duration = 1.0;
+    const startTime = Date.now();
     
-    // Determine the "up" vector for the spiraling animation
-    // Use a combination of camera direction and black hole position
-    // This ensures the spiral is visible from the player's perspective
-    const upVector = new THREE.Vector3(0, 0, 1);
-    
-    // Get vector from object to black hole for the spiral plane
-    const objectToBlackHole = new THREE.Vector3().subVectors(
-      this.position,
-      initialPosition
-    ).normalize();
-    
-    // Create a right vector perpendicular to up and object-to-blackhole
-    const rightVector = new THREE.Vector3().crossVectors(upVector, objectToBlackHole).normalize();
-    
-    // Create a new up vector that's perpendicular to object-to-blackhole and right
-    // This ensures our spiral plane is properly oriented in 3D space
-    const spiralUpVector = new THREE.Vector3().crossVectors(objectToBlackHole, rightVector).normalize();
-    
-    // Create animation function
-    const animateAbsorption = () => {
-      // Calculate elapsed time
-      const currentTime = performance.now() / 1000;
-      const elapsed = currentTime - startTime;
+    // The animation function
+    const animate = () => {
+      // Calculate progress (0 to 1)
+      const now = Date.now();
+      const elapsed = (now - startTime) / 1000;
       const progress = Math.min(elapsed / duration, 1.0);
       
-      // Calculate delta time for smooth rotation regardless of frame rate
-      const deltaTime = Math.min(0.1, elapsed - (animateAbsorption.lastTime || 0));
-      animateAbsorption.lastTime = elapsed;
+      // Current black hole position
+      const bhPos = this.position;
       
-      // Use easing function for smoother spiral
-      const easeProgress = 1 - Math.pow(1 - progress, 2); // Quadratic ease out
+      // Linear movement directly toward black hole
+      const x = startPos.x + (bhPos.x - startPos.x) * progress;
+      const y = startPos.y + (bhPos.y - startPos.y) * progress;
+      const z = startPos.z + (bhPos.z - startPos.z) * progress;
       
-      // Get current black hole position and size - these may have changed since animation started
-      const currentBlackHolePosition = this.position.clone();
-      const currentBlackHoleRadius = this.getRadius();
+      // Update position
+      object.position.set(x, y, z);
+      object.mesh.position.set(x, y, z);
       
-      // Calculate offset from initial black hole position to current position
-      const blackHoleOffset = new THREE.Vector3().subVectors(
-        currentBlackHolePosition, 
-        initialBlackHolePosition
-      );
+      // Scale down linearly
+      const scale = 1.0 - progress;
+      object.mesh.scale.set(scale, scale, scale);
       
-      // Calculate scaling factor between initial and current black hole size
-      const radiusRatio = currentBlackHoleRadius / initialBlackHoleRadius;
-      
-      // Calculate spiral parameters
-      const angle = progress * Math.PI * 10; // 10 full rotations during the animation
-      const spiralTightness = 0.9;
-      
-      // Get the object's initial distance to update spiral properly
-      const initialDist = initialPosition.distanceTo(initialBlackHolePosition);
-      
-      // Calculate current distance from the center, getting smaller as animation progresses
-      const currentDist = initialDist * (1 - easeProgress);
-      
-      // Calculate position on the spiral in the plane perpendicular to the black hole direction
-      // This creates a true 3D spiral effect now
-      
-      // Calculate the position along the spiral
-      // Start at the initial position and spiral inward toward the black hole
-      
-      // Calculate the spiral components
-      const spiralX = Math.cos(angle) * currentDist * spiralTightness;
-      const spiralY = Math.sin(angle) * currentDist * spiralTightness;
-      
-      // Create vectors for the spiral plane
-      const tangentVector = rightVector.clone().multiplyScalar(spiralX);
-      const normalVector = spiralUpVector.clone().multiplyScalar(spiralY);
-      
-      // Calculate intermediate point between object and black hole
-      const midPoint = new THREE.Vector3().lerpVectors(
-        initialPosition,
-        currentBlackHolePosition,
-        easeProgress
-      );
-      
-      // Add spiral offset to the midpoint
-      const newPosition = midPoint.clone()
-        .add(tangentVector)
-        .add(normalVector);
-      
-      // Update the object's position
-      object.position.copy(newPosition);
-      object.mesh.position.copy(newPosition);
-      
-      // Scale down as the object gets closer to the black hole
-      const currentScale = 1 - easeProgress * 0.8;
-      object.mesh.scale.set(currentScale, currentScale, currentScale);
-      
-      // Add rotation effect for more dramatic animation
-      const rotationSpeed = 5.0;
-      object.mesh.rotation.x += rotationSpeed * deltaTime;
-      object.mesh.rotation.y += rotationSpeed * deltaTime;
-      object.mesh.rotation.z += rotationSpeed * deltaTime;
-      
-      // If animation is complete
+      // Finish at progress 1.0
       if (progress >= 1.0) {
-        // Mark object as absorbed
+        // Mark as absorbed
         object.isAbsorbed = true;
         
-        // Update black hole mass - scale factor based on object type
-        // Use MUCH smaller percentages of object mass (similar to original 2.5%)
-        let massFactor = 0.025; // Default/baseline factor (same as original)
+        // Set position to black hole
+        object.position.copy(bhPos);
+        object.mesh.position.copy(bhPos);
+        object.mesh.scale.set(0, 0, 0);
         
-        // Differentiate absorption by object type with small adjustments
-        if (object.type === 'star') {
-          // Stars provide slightly more than the default
-          massFactor = 0.03;
-        } else if (object.type === 'planet') {
-          // Planets provide the default amount
-          massFactor = 0.025;
-        } else if (object.type === 'debris') {
-          // Debris provides slightly less than the default
-          massFactor = 0.02;
-        }
+        // Increase black hole mass
+        let massFactor = 0.025;
+        if (object.type === 'star') massFactor = 0.03;
+        else if (object.type === 'debris') massFactor = 0.02;
         
-        // Increment black hole mass
         this.increaseMass(object.mass * massFactor);
         
-        // Trigger any object-absorbed callbacks
+        // Call callback
         if (this.onObjectAbsorbed) {
           this.onObjectAbsorbed(object);
         }
       } else {
-        // Continue animation on next frame
-        requestAnimationFrame(animateAbsorption);
+        // Continue animation
+        requestAnimationFrame(animate);
       }
     };
     
-    // Start the animation
-    animateAbsorption();
+    // Start animation
+    animate();
   }
   
   update(deltaTime, celestialObjects) {
