@@ -133,9 +133,16 @@ window.Game = class Game {
     const x = (event.clientX / window.innerWidth) * 2 - 1;
     const y = -(event.clientY / window.innerHeight) * 2 + 1;
     
-    // Convert to world coordinates
-    const worldPos = new THREE.Vector3(x, y, 0);
-    worldPos.unproject(this.camera);
+    // Create a ray from the camera position through the mouse position
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(x, y), this.camera);
+    
+    // Create a plane at z=0 (game plane)
+    const gamePlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    
+    // Find where the ray intersects the game plane
+    const worldPos = new THREE.Vector3();
+    raycaster.ray.intersectPlane(gamePlane, worldPos);
     
     // Limit the target position to the game area bounds
     const targetX = Math.max(-this.gameWidth/2, Math.min(this.gameWidth/2, worldPos.x));
@@ -328,19 +335,17 @@ window.Game = class Game {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x01020A); // Darker blue-black background
     
-    // Create camera - use orthographic for 2D view
+    // Create camera - using perspective camera for 3D view
     const aspectRatio = window.innerWidth / window.innerHeight;
-    const frustumSize = 60;
-    this.camera = new THREE.OrthographicCamera(
-      frustumSize * aspectRatio / -2,
-      frustumSize * aspectRatio / 2,
-      frustumSize / 2,
-      frustumSize / -2,
+    const fov = 40; // Slightly narrower field of view for less distortion
+    this.camera = new THREE.PerspectiveCamera(
+      fov,
+      aspectRatio,
       0.1,
       1000
     );
-    // Start camera a bit closer to allow room for zooming out
-    this.camera.position.z = 80;
+    // Position camera to get a similar view as original orthographic camera
+    this.camera.position.z = 90; // Moved back slightly for better view
     this.camera.lookAt(0, 0, 0);
     
     // Create renderer
@@ -482,15 +487,15 @@ window.Game = class Game {
   }
   
   createStarfield() {
-    // Create a black background plane
-    const backgroundGeometry = new THREE.PlaneGeometry(this.gameWidth * 2, this.gameHeight * 2);
+    // Create a black background plane at far distance
+    const backgroundGeometry = new THREE.PlaneGeometry(this.gameWidth * 4, this.gameHeight * 4);
     const backgroundMaterial = new THREE.MeshBasicMaterial({
       color: 0x01020A, // Darker blue-black
       transparent: false,
       depthWrite: false
     });
     const backgroundMesh = new THREE.Mesh(backgroundGeometry, backgroundMaterial);
-    backgroundMesh.position.z = -100;
+    backgroundMesh.position.z = -250; // Moved further back for better depth effect
     this.scene.add(backgroundMesh);
     backgroundMesh.layers.set(0); // Make sure it doesn't get bloom
 
@@ -500,14 +505,14 @@ window.Game = class Game {
   
   addSparseBrightStars() {
     const starsGroup = new THREE.Group();
-    const starCount = 150; // Increased from 50 to 150
+    const starCount = 150; // Reverted back to original count
     
     // Generate random stars (60% of total)
     const randomStarCount = Math.floor(starCount * 0.6);
     for (let i = 0; i < randomStarCount; i++) {
-      const x = (Math.random() - 0.5) * this.gameWidth * 1.8;
-      const y = (Math.random() - 0.5) * this.gameHeight * 1.8;
-      const size = Math.random() * 3 + 1; // Size between 1 and 4 pixels
+      const x = (Math.random() - 0.5) * this.gameWidth * 2.5; // Wider coverage
+      const y = (Math.random() - 0.5) * this.gameHeight * 2.5; // Wider coverage
+      const size = Math.random() * 2 + 0.5; // Smaller size between 0.5 and 2.5 pixels
       
       // Randomize brightness a bit more
       const brightness = Math.random() * 0.3 + 0.7; // 0.7 to 1.0
@@ -623,7 +628,7 @@ window.Game = class Game {
   createStarPoint(x, y, size, brightness = 1.0) {
     // Create a point sprite for the star
     const material = new THREE.PointsMaterial({
-      size: size,
+      size: size * 0.5, // Reduced size to make them more star-like
       map: this.getStarTexture(),
       transparent: true,
       opacity: brightness,
@@ -631,8 +636,11 @@ window.Game = class Game {
       blending: THREE.AdditiveBlending
     });
     
+    // Add random Z position for depth with perspective camera
+    const z = -80 - Math.random() * 150; // Random depth between -80 and -230
+    
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute([x, y, -50], 3));
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([x, y, z], 3));
     
     return new THREE.Points(geometry, material);
   }
@@ -970,7 +978,7 @@ window.Game = class Game {
   }
   
   generateObjects() {
-    // Generate celestial objects in 2D plane
+    // Generate celestial objects in 3D space with subtle depth
     this.celestialObjects = [];
     
     // Number of objects to generate - increased for a fuller game field
@@ -1016,8 +1024,11 @@ window.Game = class Game {
       });
       
       // Position randomly but avoid the center where the black hole starts
-      let x, y;
+      let x, y, z;
       let distance;
+      
+      // Add slight z variation for 3D effect (-10 to 10)
+      z = (Math.random() - 0.5) * 20;
       
       // Create a better distribution of objects across the play area
       const distributionMethod = Math.random();
@@ -1035,6 +1046,11 @@ window.Game = class Game {
         const angle = Math.random() * Math.PI * 2;
         x = Math.cos(angle) * ringRadius;
         y = Math.sin(angle) * ringRadius;
+        
+        // Add slight z variation for ring tilt (creating a subtle 3D orbital plane)
+        const ringTilt = Math.random() * 0.2; // Small tilt factor
+        z = Math.sin(angle) * ringRadius * ringTilt;
+        
         distance = ringRadius;
       } else {
         // Position at the edges (for objects coming into the scene)
@@ -1060,7 +1076,7 @@ window.Game = class Game {
         distance = Math.sqrt(x*x + y*y);
       }
       
-      object.position.set(x, y, 0);
+      object.position.set(x, y, z || 0);
       object.mesh.position.copy(object.position);
       
       // Add more varied velocity for orbital motion
@@ -1084,7 +1100,11 @@ window.Game = class Game {
       const radialDx = Math.cos(angle) * radialComponent;
       const radialDy = Math.sin(angle) * radialComponent;
       
-      object.velocity = new THREE.Vector3(dx + radialDx, dy + radialDy, 0);
+      // Add a small z-component for subtle vertical movement
+      // Keep it very small to avoid objects heading toward the camera
+      const dz = (Math.random() - 0.5) * 0.2;
+      
+      object.velocity = new THREE.Vector3(dx + radialDx, dy + radialDy, dz);
       
       // Add to game
       this.celestialObjects.push(object);
@@ -1392,7 +1412,10 @@ window.Game = class Game {
       // Position randomly on the edges with more variation
       const side = Math.floor(Math.random() * 4); // 0: top, 1: right, 2: bottom, 3: left
       const distanceVariation = 0.2; // Allow objects to appear deeper into the play area
-      let x, y;
+      let x, y, z;
+      
+      // Add subtle z-depth for 3D effect (-10 to 10)
+      z = (Math.random() - 0.5) * 20;
       
       switch (side) {
         case 0: // top
@@ -1413,7 +1436,7 @@ window.Game = class Game {
           break;
       }
       
-      object.position.set(x, y, 0);
+      object.position.set(x, y, z);
       object.mesh.position.copy(object.position);
       
       // More varied velocity for objects
@@ -1426,7 +1449,11 @@ window.Game = class Game {
       const dx = Math.cos(centerAngle + angleVariation) * speed;
       const dy = Math.sin(centerAngle + angleVariation) * speed;
       
-      object.velocity = new THREE.Vector3(dx, dy, 0);
+      // Add very subtle z velocity component for gentle 3D movement
+      // Keep it small to avoid objects heading directly toward the camera
+      const dz = (Math.random() - 0.5) * 0.1;
+      
+      object.velocity = new THREE.Vector3(dx, dy, dz);
       
       // Add small perpendicular velocity for more orbital trajectories
       if (Math.random() < 0.7) { // 70% chance for orbital component
@@ -1444,12 +1471,9 @@ window.Game = class Game {
   
   onWindowResize() {
     const aspectRatio = window.innerWidth / window.innerHeight;
-    const frustumSize = 60;
     
-    this.camera.left = frustumSize * aspectRatio / -2;
-    this.camera.right = frustumSize * aspectRatio / 2;
-    this.camera.top = frustumSize / 2;
-    this.camera.bottom = frustumSize / -2;
+    // Update for perspective camera
+    this.camera.aspect = aspectRatio;
     
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
