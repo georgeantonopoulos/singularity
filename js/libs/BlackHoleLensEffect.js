@@ -124,7 +124,7 @@ export class BlackHoleLensEffect {
             
             // Add subtle time-based ripples with longer wavelength
             // Use slower and longer wavelength for less noisy, more elegant ripples
-            float timeRipple = sin(dist * 10.0 - time * 0.8) * 0.05;
+            float timeRipple = sin(dist * 15.0 - time * 0.8) * 0.04;
             deflectionFactor *= (1.0 + timeRipple);
             
             // Create Einstein ring effect - intensify at certain radius

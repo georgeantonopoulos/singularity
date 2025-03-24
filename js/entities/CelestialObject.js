@@ -349,8 +349,44 @@ export class CelestialObject {
     return Math.pow(this.mass, 1/3) * 0.8;
   }
   
-  update(deltaTime, blackHole) {
+  update(deltaTime, blackHole, allObjects) {
     if (this.isAbsorbed) return;
+    
+    // Planets are influenced by nearby stars (new feature)
+    if (this.type === OBJECT_TYPES.PLANET && allObjects) {
+      // Look for nearby stars that can influence this planet
+      for (const obj of allObjects) {
+        if (obj !== this && obj.type === OBJECT_TYPES.STAR && !obj.isAbsorbed) {
+          const distance = this.position.distanceTo(obj.position);
+          
+          // Only apply influence within a reasonable range (scale with star mass)
+          const influenceRadius = obj.mass * 8;
+          
+          if (distance < influenceRadius) {
+            // Calculate gravitational pull from the star
+            // Direction to the star
+            const dirToStar = new THREE.Vector3().subVectors(obj.position, this.position).normalize();
+            
+            // Force is proportional to star's mass and inversely proportional to distance squared
+            // Using a smaller gravitational constant for better gameplay
+            const starGravityConstant = 0.015;
+            const forceMagnitude = starGravityConstant * obj.mass / (distance * distance);
+            
+            // Apply force as acceleration (F=ma, a=F/m)
+            const starAcceleration = dirToStar.multiplyScalar(forceMagnitude);
+            
+            // Add star's gravity to planet's velocity
+            this.velocity.add(starAcceleration.multiplyScalar(deltaTime));
+            
+            // Add slight perpendicular component for orbital motion if very close to the star
+            if (distance < influenceRadius * 0.5) {
+              const perpDirection = new THREE.Vector3(-dirToStar.y, dirToStar.x, 0).normalize();
+              this.velocity.add(perpDirection.multiplyScalar(forceMagnitude * 0.5 * deltaTime));
+            }
+          }
+        }
+      }
+    }
     
     if (blackHole) {
       // Calculate gravitational force

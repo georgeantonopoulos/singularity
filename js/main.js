@@ -1307,7 +1307,7 @@ class Game {
         }
         
         // Update object position based on gravitational pull
-        object.update(deltaTime, this.blackHole);
+        object.update(deltaTime, this.blackHole, this.celestialObjects);
         
         // Update trajectory line if it exists
         if (object.trajectoryLine && !object.isAbsorbed && this.blackHole) {

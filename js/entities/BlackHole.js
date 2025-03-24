@@ -185,7 +185,8 @@ export class BlackHole {
     if (celestialObject.isAbsorbed) return false;
     
     const distance = this.position.distanceTo(celestialObject.position);
-    const absorptionRadius = this.getRadius() * 2 + celestialObject.getRadius();
+    // Increased multiplier from 2 to 4 to ensure the absorption radius scales with black hole growth
+    const absorptionRadius = this.getRadius() * 4 + celestialObject.getRadius();
     
     if (distance <= absorptionRadius) {
       console.log(`Object absorption started! Type: ${celestialObject.type}, Mass: ${celestialObject.mass.toFixed(2)}, Distance: ${distance.toFixed(2)}`);
