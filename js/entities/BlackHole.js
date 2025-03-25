@@ -159,7 +159,8 @@ export class BlackHole {
     
     // Calculate alignment factor - higher when xy-distance is small compared to z-distance
     // Using a much wider detection radius - similar to the visual indicator in main.js
-    const maxAlignmentDistance = 15; // Significantly increased to match the wider detection in main.js
+    // Scale detection radius with black hole mass
+    const maxAlignmentDistance = 15 * Math.pow(this.mass, 0.33); // Scales with black hole mass
     let alignmentFactor = 1.0; // Default/minimum factor
     
     if (xyDistance < maxAlignmentDistance) {
@@ -167,8 +168,8 @@ export class BlackHole {
       const alignmentPrecision = 1.0 - (xyDistance / maxAlignmentDistance);
       
       // Exponential curve for stronger effect at better alignment
-      // Significantly increased multiplier (from 3.0 to 5.0) for stronger gravitational effect
-      const alignmentBoost = Math.pow(alignmentPrecision, 2) * 100.0; // Up to 5x stronger pull when perfectly aligned
+      // Scale alignment boost with black hole mass
+      const alignmentBoost = Math.pow(alignmentPrecision, 2) * 100.0 * Math.pow(this.mass, 0.25);
       alignmentFactor = 1.0 + alignmentBoost;
       
       // Debug log when strong alignment is detected
@@ -181,7 +182,8 @@ export class BlackHole {
     let forceMagnitude;
     
     // Event horizon-like effect: extreme pull when very close
-    const eventHorizonRadius = this.getRadius() * 5;
+    // Scale event horizon radius with black hole mass
+    const eventHorizonRadius = this.getRadius() * 5 * Math.pow(this.mass, 0.33);
     if (distance < eventHorizonRadius) {
       // Exponential increase in force as objects get very close
       // This creates a "point of no return" effect
@@ -199,7 +201,7 @@ export class BlackHole {
       t = Math.max(0, Math.min(1, t));
       forceMagnitude = (1 - t) * invSquare + t * invLinear;
       
-      // Apply alignment factor to normal gravitational force
+      // Apply alignment factor
       forceMagnitude *= alignmentFactor;
     }
     
@@ -317,8 +319,10 @@ export class BlackHole {
     // Calculate z-distance (depth) between object and black hole
     const zDistance = Math.abs(this.position.z - celestialObject.position.z);
     
-    // Significantly increased absorption radius for more aggressive capture
-    const absorptionRadius = this.getRadius() * 6 + celestialObject.getRadius();
+    // Scale absorption radius with black hole mass
+    // Larger black holes can absorb objects from further away
+    const massScaleFactor = Math.pow(this.mass, 0.4); // Higher exponent = more aggressive growth
+    const absorptionRadius = this.getRadius() * 6 * massScaleFactor + celestialObject.getRadius();
     
     // Calculate z-factor to adjust absorption radius based on z-position
     // Objects further away in z-space should be harder to absorb
@@ -333,9 +337,8 @@ export class BlackHole {
       adjustedAbsorptionRadius *= (1 + Math.min(zDistance/40, 0.8));
     }
     
-    // More lenient absorption check - if objects are close in x-y plane OR close in 3D space
-    // Adjust max Z absorption range based on black hole size for better scaling
-    const maxZAbsorption = this.getRadius() * 8; // Slightly reduced z-range for more realistic absorption
+    // Scale max Z absorption range based on black hole size for better scaling
+    const maxZAbsorption = this.getRadius() * 8 * massScaleFactor; // Scales with black hole size
     
     // Check if object should be absorbed based on either x-y distance or full 3D distance
     // Use a weighted approach that considers both xy-distance and z-distance
@@ -432,12 +435,24 @@ export class BlackHole {
     
     // Check for collisions and absorptions
     if (celestialObjects) {
-      for (const object of celestialObjects) {
-        if (!object.isAbsorbed && !object.isBeingAbsorbed) {
-          this.checkAbsorption(object);
+      // Scale absorption check frequency with mass - larger black holes check more frequently
+      const checkFrequency = Math.max(1, Math.floor(10 / Math.pow(this.mass, 0.5)));
+      
+      // Only check a subset of objects each frame to improve performance
+      // As the black hole grows, it will check more objects per frame
+      for (let i = 0; i < celestialObjects.length; i++) {
+        const object = celestialObjects[i];
+        // Check objects based on a rotating index and black hole mass
+        if (i % checkFrequency === this.frameCount % checkFrequency) {
+          if (!object.isAbsorbed && !object.isBeingAbsorbed) {
+            this.checkAbsorption(object);
+          }
         }
       }
     }
+    
+    // Update frame counter
+    this.frameCount = (this.frameCount || 0) + 1;
   }
   
   // Get screen position for lens effect

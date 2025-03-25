@@ -11,12 +11,39 @@ export class Interaction {
     this.canvas = canvas;
     this.options = {
       preventDefault: true,
+      // Camera control options
+      panEnabled: true,
+      zoomEnabled: true,
+      panSpeed: 1.0,
+      zoomSpeed: 5.0,
+      minZoom: 30,
+      maxZoom: 150,
+      easeOutStrength: 0.12, // Higher = faster easing
       ...options
     };
     
     // Track mouse position
-    this.mouse = { x: 0, y: 0, down: false };
+    this.mouse = { 
+      x: 0, 
+      y: 0, 
+      down: false,
+      middleDown: false,
+      rightDown: false
+    };
     this.normalizedMouse = { x: 0, y: 0 };
+    
+    // Camera control state
+    this.camera = null;
+    this.isPanning = false;
+    this.panStartX = 0;
+    this.panStartY = 0;
+    this.cameraStartX = 0;
+    this.cameraStartY = 0;
+    this.targetCameraX = 0;
+    this.targetCameraY = 0;
+    this.targetCameraZ = 0;
+    this.lastWheelTime = 0;
+    this.wheelDelta = 0;
     
     // Track touch positions
     this.touches = [];
@@ -28,6 +55,7 @@ export class Interaction {
     this.onMouseMove = this.onMouseMove.bind(this);
     this.onMouseDown = this.onMouseDown.bind(this);
     this.onMouseUp = this.onMouseUp.bind(this);
+    this.onWheel = this.onWheel.bind(this);
     this.onTouchStart = this.onTouchStart.bind(this);
     this.onTouchMove = this.onTouchMove.bind(this);
     this.onTouchEnd = this.onTouchEnd.bind(this);
@@ -42,7 +70,9 @@ export class Interaction {
       click: [],
       move: [],
       keydown: [],
-      keyup: []
+      keyup: [],
+      pan: [],
+      zoom: []
     };
   }
   
@@ -51,9 +81,26 @@ export class Interaction {
    */
   addEventListeners() {
     // Mouse events
-    this.canvas.addEventListener('mousemove', this.onMouseMove);
-    this.canvas.addEventListener('mousedown', this.onMouseDown);
+    this.canvas.addEventListener('mousemove', this.onMouseMove, true);
+    this.canvas.addEventListener('mousedown', this.onMouseDown, true);
     document.addEventListener('mouseup', this.onMouseUp);
+    
+    // Prevent middle mouse click from being handled by other handlers
+    this.canvas.addEventListener('auxclick', (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+    }, true);
+    
+    // Prevent default behavior of middle mouse click (often auto-scroll)
+    this.canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+    });
+    
+    // Wheel event for zooming
+    this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
     
     // Touch events
     this.canvas.addEventListener('touchstart', this.onTouchStart);
@@ -70,9 +117,16 @@ export class Interaction {
    */
   removeEventListeners() {
     // Mouse events
-    this.canvas.removeEventListener('mousemove', this.onMouseMove);
-    this.canvas.removeEventListener('mousedown', this.onMouseDown);
+    this.canvas.removeEventListener('mousemove', this.onMouseMove, true);
+    this.canvas.removeEventListener('mousedown', this.onMouseDown, true);
     document.removeEventListener('mouseup', this.onMouseUp);
+    
+    // Remove auxclick and contextmenu handlers
+    this.canvas.removeEventListener('auxclick', this.onMouseDown, true);
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu);
+    
+    // Wheel event
+    this.canvas.removeEventListener('wheel', this.onWheel);
     
     // Touch events
     this.canvas.removeEventListener('touchstart', this.onTouchStart);
@@ -85,14 +139,25 @@ export class Interaction {
   }
   
   /**
+   * Set the camera to control
+   * @param {THREE.Camera} camera - The camera to control
+   */
+  setCamera(camera) {
+    this.camera = camera;
+    
+    // Initialize target positions with current camera position
+    if (camera) {
+      this.targetCameraX = camera.position.x;
+      this.targetCameraY = camera.position.y;
+      this.targetCameraZ = camera.position.z;
+    }
+  }
+  
+  /**
    * Handle mouse movement
    * @param {MouseEvent} event - Mouse event
    */
   onMouseMove(event) {
-    if (this.options.preventDefault) {
-      event.preventDefault();
-    }
-    
     // Update mouse coordinates
     const rect = this.canvas.getBoundingClientRect();
     this.mouse.x = event.clientX - rect.left;
@@ -102,8 +167,38 @@ export class Interaction {
     this.normalizedMouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     this.normalizedMouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     
+    // Handle camera panning if middle mouse is down
+    if (this.mouse.middleDown && this.options.panEnabled && this.camera) {
+      // Prevent event completely when panning with middle mouse
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      
+      const deltaX = (event.clientX - this.panStartX) * this.options.panSpeed * 0.01;
+      const deltaY = (event.clientY - this.panStartY) * this.options.panSpeed * 0.01;
+      
+      // Set target positions for smooth easing
+      this.targetCameraX = this.cameraStartX - deltaX;
+      this.targetCameraY = this.cameraStartY + deltaY; // Invert Y for natural panning
+      
+      // Call pan callbacks
+      this.callbacks.pan.forEach(callback => callback({
+        deltaX: -deltaX,
+        deltaY: deltaY,
+        x: this.targetCameraX,
+        y: this.targetCameraY
+      }));
+      
+      // Return false to really ensure the event is completely stopped
+      return false;
+    }
+    
     // Call registered callbacks
     this.callbacks.move.forEach(callback => callback(this.mouse));
+    
+    if (this.options.preventDefault) {
+      event.preventDefault();
+    }
   }
   
   /**
@@ -111,11 +206,36 @@ export class Interaction {
    * @param {MouseEvent} event - Mouse event
    */
   onMouseDown(event) {
+    // Track which button is pressed
+    if (event.button === 0) {
+      this.mouse.down = true;
+    } else if (event.button === 1) {
+      // Middle mouse button - COMPLETELY prevent this event
+      this.mouse.middleDown = true;
+      
+      // We need to capture the event in the capture phase and prevent it completely
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      
+      // Start panning if enabled
+      if (this.options.panEnabled && this.camera) {
+        this.isPanning = true;
+        this.panStartX = event.clientX;
+        this.panStartY = event.clientY;
+        this.cameraStartX = this.camera.position.x;
+        this.cameraStartY = this.camera.position.y;
+        this.canvas.style.cursor = 'grabbing'; // Visual feedback
+      }
+      
+      return false;
+    } else if (event.button === 2) {
+      this.mouse.rightDown = true;
+    }
+    
     if (this.options.preventDefault) {
       event.preventDefault();
     }
-    
-    this.mouse.down = true;
   }
   
   /**
@@ -123,18 +243,71 @@ export class Interaction {
    * @param {MouseEvent} event - Mouse event
    */
   onMouseUp(event) {
-    this.mouse.down = false;
-    
-    // Call click callbacks if mouse is up
-    const rect = this.canvas.getBoundingClientRect();
-    if (
-      event.clientX >= rect.left && 
-      event.clientX <= rect.right && 
-      event.clientY >= rect.top && 
-      event.clientY <= rect.bottom
-    ) {
-      this.callbacks.click.forEach(callback => callback(this.mouse));
+    // Track which button was released
+    if (event.button === 0) {
+      this.mouse.down = false;
+      
+      // Call click callbacks if left mouse is released
+      const rect = this.canvas.getBoundingClientRect();
+      if (
+        event.clientX >= rect.left && 
+        event.clientX <= rect.right && 
+        event.clientY >= rect.top && 
+        event.clientY <= rect.bottom
+      ) {
+        this.callbacks.click.forEach(callback => callback(this.mouse));
+      }
+    } else if (event.button === 1) {
+      // Middle mouse button
+      this.mouse.middleDown = false;
+      this.isPanning = false;
+      this.canvas.style.cursor = 'default';
+      
+      // Stop event propagation
+      event.stopPropagation();
+    } else if (event.button === 2) {
+      this.mouse.rightDown = false;
     }
+  }
+  
+  /**
+   * Handle mouse wheel for zooming
+   * @param {WheelEvent} event - Wheel event
+   */
+  onWheel(event) {
+    if (this.options.preventDefault) {
+      event.preventDefault();
+    }
+    
+    // Stop propagation to prevent other wheel handlers
+    event.stopPropagation();
+    
+    // Only handle zooming if enabled and we have a camera
+    if (!this.options.zoomEnabled || !this.camera) return;
+    
+    // Use deltaY for more consistent behavior across browsers
+    // Note: deltaY is positive when scrolling down and negative when scrolling up
+    const delta = -Math.sign(event.deltaY);
+    
+    // Scale zoom amount by current distance for more natural feeling
+    // Further away = bigger jumps, closer = smaller, more precise jumps
+    const distanceFactor = Math.max(0.5, this.camera.position.z / 90);
+    const zoomAmount = delta * this.options.zoomSpeed * distanceFactor;
+    
+    // Update target zoom with easing
+    this.targetCameraZ = Math.max(
+      this.options.minZoom, 
+      Math.min(this.options.maxZoom, this.camera.position.z - zoomAmount)
+    );
+    
+    // Record time for easing calculations
+    this.lastWheelTime = Date.now();
+    
+    // Call zoom callbacks
+    this.callbacks.zoom.forEach(callback => callback({
+      delta: delta,
+      targetZ: this.targetCameraZ
+    }));
   }
   
   /**
@@ -225,6 +398,44 @@ export class Interaction {
   }
   
   /**
+   * Update function to handle smooth easing of camera movements
+   * Call this from your game's animation loop
+   * @param {number} deltaTime - Time since last frame in seconds
+   */
+  update(deltaTime) {
+    if (!this.camera) return;
+    
+    // Apply smooth easing to camera position
+    const easeAmount = this.options.easeOutStrength;
+    
+    // Calculate time-based easing factor for smoother movement
+    // This helps ensure consistent easing regardless of frame rate
+    const scaledEaseAmount = Math.min(1.0, easeAmount * (deltaTime * 60)); // Scale by target 60 FPS
+    
+    // Handle pan position easing
+    if (!this.mouse.middleDown) {
+      // Only apply easing when not actively panning
+      this.camera.position.x += (this.targetCameraX - this.camera.position.x) * scaledEaseAmount;
+      this.camera.position.y += (this.targetCameraY - this.camera.position.y) * scaledEaseAmount;
+    } else {
+      // Direct positioning while actively panning
+      this.camera.position.x = this.targetCameraX;
+      this.camera.position.y = this.targetCameraY;
+    }
+    
+    // Handle zoom easing - use stronger easing for zoom to make it feel snappier
+    const zoomEaseAmount = Math.min(1.0, (easeAmount * 1.2) * (deltaTime * 60));
+    this.camera.position.z += (this.targetCameraZ - this.camera.position.z) * zoomEaseAmount;
+    
+    // Update camera look target to match panning
+    this.camera.lookAt(
+      this.camera.position.x,
+      this.camera.position.y,
+      0
+    );
+  }
+  
+  /**
    * Check if a key is pressed
    * @param {string} key - Key to check
    * @returns {boolean} Whether key is pressed
@@ -235,7 +446,7 @@ export class Interaction {
   
   /**
    * Register a callback for a specific interaction
-   * @param {string} type - Interaction type ('click', 'move', 'keydown', 'keyup')
+   * @param {string} type - Interaction type ('click', 'move', 'keydown', 'keyup', 'pan', 'zoom')
    * @param {Function} callback - Callback function
    */
   on(type, callback) {
@@ -267,7 +478,9 @@ export class Interaction {
       click: [],
       move: [],
       keydown: [],
-      keyup: []
+      keyup: [],
+      pan: [],
+      zoom: []
     };
   }
 } 

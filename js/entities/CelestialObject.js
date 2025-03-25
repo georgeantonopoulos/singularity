@@ -385,19 +385,50 @@ export class CelestialObject {
   updateOrbit(deltaTime) {
     if (!this.parent) return;
     
-    // Update orbital position around parent
-    this.orbitalPhase += this.orbitalSpeed * deltaTime;
+    // Calculate current orbit values
+    const toParent = new THREE.Vector3().subVectors(this.parent.position, this.position);
+    const distance = toParent.length();
+    toParent.normalize();
     
-    // Calculate new position based on orbit
-    const x = this.parent.position.x + Math.cos(this.orbitalPhase) * this.orbitalRadius;
-    const y = this.parent.position.y + Math.sin(this.orbitalPhase) * this.orbitalRadius;
+    // Calculate the perpendicular direction (for orbit)
+    const perpDirection = new THREE.Vector3(-toParent.y, toParent.x, 0).normalize();
     
-    // Add inclination effect for 3D-like orbits
-    const z = Math.sin(this.orbitalPhase) * this.orbitalRadius * this.orbitalInclination;
+    // Calculate orbital velocity based on parent mass and distance
+    // Using simplified orbit equation: v = sqrt(G * M / r)
+    const G = 0.3; // Gravitational constant (scaled for game)
+    const orbitSpeed = Math.sqrt(G * this.parent.mass / distance);
     
-    // Update position
-    this.position.set(x, y, z);
-    this.mesh.position.copy(this.position);
+    // Calculate acceleration towards parent (centripetal force)
+    // a = v² / r = G * M / r²
+    const centerAccel = toParent.clone().multiplyScalar(G * this.parent.mass / (distance * distance));
+    
+    // Apply acceleration to velocity
+    this.velocity.add(centerAccel.multiplyScalar(deltaTime));
+    
+    // Check if we need to correct the orbit
+    const currentOrbitalVelocity = this.velocity.dot(perpDirection);
+    const desiredOrbitalVelocity = orbitSpeed;
+    
+    // If orbital velocity is too different from desired, gradually correct it
+    if (Math.abs(currentOrbitalVelocity - desiredOrbitalVelocity) > 0.1) {
+      // Calculate velocity correction factor (0.1 = 10% correction per update)
+      const correction = 0.1;
+      
+      // Apply velocity correction along orbital direction
+      const correctionVelocity = perpDirection.clone().multiplyScalar(
+        (desiredOrbitalVelocity - currentOrbitalVelocity) * correction
+      );
+      
+      this.velocity.add(correctionVelocity);
+    }
+    
+    // Update position based on velocity
+    this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
+    
+    // Update mesh position
+    if (this.mesh) {
+      this.mesh.position.copy(this.position);
+    }
   }
   
   // Add this method to the CelestialObject class to visually represent z-position
@@ -479,9 +510,8 @@ export class CelestialObject {
         // Calculate distance to black hole
         const distance = this.position.distanceTo(blackHole.position);
         
-        // Only apply black hole gravity if within influence radius
-        // This ensures stars and planets maintain their orbits unless close to the black hole
-        const blackHoleInfluenceRadius = blackHole.getRadius() * 15; // Larger radius of influence
+        // Scale influence radius based on black hole mass
+        const blackHoleInfluenceRadius = blackHole.getRadius() * 15 * Math.pow(blackHole.mass, 0.33);
         
         if (distance < blackHoleInfluenceRadius) {
           // Calculate gravitational force
@@ -495,7 +525,12 @@ export class CelestialObject {
           // Calculate force magnitude (F = G * (m1 * m2) / r^2)
           // Scale force by distance - stronger pull when closer to black hole
           const distanceFactor = Math.pow(1 - Math.min(1, distance / blackHoleInfluenceRadius), 2);
-          const forceMagnitude = G * (blackHole.mass * this.mass) / (safeDistance * safeDistance) * (0.2 + 0.8 * distanceFactor);
+          
+          // Scale force by black hole mass - larger black holes have stronger pull
+          const blackHoleMassFactor = Math.pow(blackHole.mass, 0.5);
+          
+          const forceMagnitude = G * (blackHole.mass * this.mass) / (safeDistance * safeDistance) * 
+                               (0.2 + 0.8 * distanceFactor) * blackHoleMassFactor;
           
           // Apply force as acceleration (F = ma, so a = F/m)
           const acceleration = direction.multiplyScalar(forceMagnitude / this.mass);

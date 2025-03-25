@@ -7,6 +7,7 @@ import { createStarfield } from './utils/starfield.js';
 import { lensPostProcessingVertexShader, lensPostProcessingFragmentShader } from './shaders/blackHoleShaders.js';
 import { BlackHoleLensEffect } from './libs/BlackHoleLensEffect.js';
 import { GalaxyCluster } from './entities/GalaxyCluster.js';
+import { Interaction } from './libs/interaction.js';
 
 // At the top of the file, after imports
 console.log("Main.js loaded with ES6 modules");
@@ -79,21 +80,40 @@ window.Game = class Game {
   }
 
   setupEventListeners() {
-    console.log("Setting up event listeners");
+    // UI elements
+    this.startButton = document.getElementById('start-button');
+    this.restartButton = document.getElementById('restart-button');
+    this.gameOverContainer = document.getElementById('game-over');
     
-    if (!this.startButton) {
-      console.error("Start button not found in the DOM!");
-      this.startButton = document.getElementById('start-button');
-      console.log("Retry getting start button:", this.startButton);
+    // Create new Interaction instance if it doesn't exist
+    if (!this.interaction) {
+      this.interaction = new Interaction(this.canvas, {
+        panEnabled: true,
+        zoomEnabled: true,
+        panSpeed: 2.0,
+        zoomSpeed: 8.0
+      });
+      
+      // Set camera for the interaction system
+      this.interaction.setCamera(this.camera);
+      
+      // Register click callback to handle black hole movement
+      this.interaction.on('click', (mouse) => {
+        if (!this.isRunning) return;
+        this.onCanvasClick({ 
+          clientX: mouse.x + this.canvas.getBoundingClientRect().left,
+          clientY: mouse.y + this.canvas.getBoundingClientRect().top
+        });
+      });
     }
     
-    // Direct click handler function for debugging
+    // Add start button listener with direct reference to function
     const handleStartClick = () => {
       console.log("Start button clicked!");
       this.startGame();
     };
     
-    // Make sure to remove any existing listeners first
+    // Remove any existing listener first
     this.startButton.removeEventListener('click', handleStartClick);
     
     // Add new listener with direct reference to function
@@ -115,15 +135,8 @@ window.Game = class Game {
     // Handle resize
     window.addEventListener('resize', () => this.onWindowResize());
     
-    // Changed: Use click instead of mousemove for black hole movement
-    this.canvas.addEventListener('click', (e) => this.onCanvasClick(e));
-    
-    // Add mousemove just to track position for visual feedback
-    this.canvas.addEventListener('mousemove', (e) => {
-      // Update mouse position but don't move black hole
-      this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-      this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    });
+    // IMPORTANT: Removed direct canvas click event listener
+    // Now using the Interaction class for all canvas input
   }
   
   onCanvasClick(event) {
@@ -500,6 +513,21 @@ window.Game = class Game {
     // Position camera to get a similar view as original orthographic camera
     this.camera.position.z = 90; // Moved back slightly for better view
     this.camera.lookAt(0, 0, 0);
+    
+    // Initialize camera controls with interaction system
+    // Fix typo: This.Canvas -> this.canvas
+    if (!this.interaction) {
+      this.interaction = new Interaction(this.canvas, {
+        panEnabled: true,
+        zoomEnabled: true,
+        panSpeed: 2.0,
+        zoomSpeed: 8.0
+      });
+      this.interaction.setCamera(this.camera);
+    } else {
+      // If interaction already exists, just update the camera
+      this.interaction.setCamera(this.camera);
+    }
     
     // Create renderer
     this.renderer = new THREE.WebGLRenderer({ 
@@ -1631,7 +1659,8 @@ window.Game = class Game {
       let type, mass, color;
       const rand = Math.random();
       
-      if (rand < 0.6) {
+      // Changed probabilities to ensure more stars
+      if (rand < 0.4) {
         // Star
         type = 'star';
         mass = Math.random() * 4 + 1; // 1-5 mass units
@@ -1665,7 +1694,58 @@ window.Game = class Game {
         showTrajectory: false // Disable all trajectories
       });
       
-      // Improved positioning strategy for new objects
+      // For planets, check if we should assign them to stars
+      if (type === 'planet' && Math.random() < 0.7) { // 70% chance of creating an orbiting planet
+        // Find a suitable star to orbit around
+        const stars = this.celestialObjects.filter(obj => 
+          obj.type === 'star' && 
+          obj.parent === null && // Only use stars that aren't already orbiting something
+          obj.position.distanceTo(this.blackHole.position) > this.blackHole.getRadius() * 8 // Only stars far enough from the black hole
+        );
+        
+        if (stars.length > 0) {
+          // Choose a random star
+          const parentStar = stars[Math.floor(Math.random() * stars.length)];
+          
+          // Set the parent and calculate orbit
+          object.parent = parentStar;
+          
+          // Random orbit distance from the star (scaled by star mass)
+          const orbitDistance = (1.5 + Math.random() * 2) * parentStar.getRadius() * 3;
+          
+          // Random initial angle
+          const angle = Math.random() * Math.PI * 2;
+          
+          // Position the planet in orbit around the star
+          object.position.set(
+            parentStar.position.x + Math.cos(angle) * orbitDistance,
+            parentStar.position.y + Math.sin(angle) * orbitDistance,
+            parentStar.position.z + (Math.random() - 0.5) * 2 // Small z-variation
+          );
+          
+          // Calculate orbital velocity based on parent star's mass
+          const orbitSpeed = Math.sqrt(0.3 * parentStar.mass / orbitDistance);
+          
+          // Set velocity perpendicular to the radius vector for circular orbit
+          const perpAngle = angle + Math.PI / 2;
+          object.velocity = new THREE.Vector3(
+            Math.cos(perpAngle) * orbitSpeed,
+            Math.sin(perpAngle) * orbitSpeed,
+            (Math.random() - 0.5) * 0.1 // Small z-component
+          );
+          
+          // Set mesh position
+          object.mesh.position.copy(object.position);
+          
+          // Add to game
+          this.celestialObjects.push(object);
+          this.scene.add(object.mesh);
+          
+          continue; // Skip the normal positioning code below
+        }
+      }
+      
+      // Standard positioning for non-orbiting objects
       // Position randomly on the edges with more variation
       const side = Math.floor(Math.random() * 4); // 0: top, 1: right, 2: bottom, 3: left
       const distanceVariation = 0.2; // Allow objects to appear deeper into the play area
@@ -1763,6 +1843,11 @@ window.Game = class Game {
     // Add debug info less frequently to avoid console spam
     if (this.frameCount % 180 === 0) {
       console.log(`Frame: ${this.frameCount}, Objects: ${this.celestialObjects.length}, BlackHole: ${this.blackHole?.mass.toFixed(2)}`);
+    }
+    
+    // Update camera controls via interaction system
+    if (this.interaction) {
+      this.interaction.update(deltaTime);
     }
     
     // Update game logic
