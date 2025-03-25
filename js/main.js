@@ -63,7 +63,7 @@ window.Game = class Game {
     this.gameWidth = 100;
     this.gameHeight = 60;
     
-    // Camera animation properties
+    // Camera animation properties - keep these but they won't be used
     this.cameraAnimationActive = false;
     this.cameraTargetPosition = new THREE.Vector3(0, 0, 0);
     this.cameraOriginalPosition = new THREE.Vector3(0, 0, 0);
@@ -142,6 +142,12 @@ window.Game = class Game {
   onCanvasClick(event) {
     if (!this.isRunning) return;
     
+    // IMPORTANT: Ignore middle mouse and right mouse button clicks for black hole movement
+    // This prevents conflicts with camera panning
+    if (event.button === 1 || event.button === 2) {
+      return;
+    }
+    
     // Calculate mouse position in normalized device coordinates (-1 to +1)
     const x = (event.clientX / window.innerWidth) * 2 - 1;
     const y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -193,8 +199,28 @@ window.Game = class Game {
     // Check for alignment with celestial objects and create visual cue
     this.checkAlignmentWithObjects();
     
-    // Check if black hole has grown too large and needs camera adjustment
+    // Empty call to checkBlackHoleSizeForCameraAdjustment (disabled)
+    // We keep the call but the function does nothing
     this.checkBlackHoleSizeForCameraAdjustment();
+  }
+  
+  // Disabled camera adjustment methods - keep as empty stubs to maintain references
+  // Empty stub function for checkBlackHoleSizeForCameraAdjustment
+  checkBlackHoleSizeForCameraAdjustment() {
+    // This function is intentionally disabled
+    return;
+  }
+  
+  // Empty stub function for resetCameraPosition
+  resetCameraPosition() {
+    // This function is intentionally disabled
+    return;
+  }
+  
+  // Empty stub function for startCameraAnimation
+  startCameraAnimation() {
+    // This function is intentionally disabled
+    return;
   }
   
   // New method to check for alignment with celestial objects
@@ -341,129 +367,11 @@ window.Game = class Game {
     }
   }
   
-  // New method to check black hole size and trigger camera animation if needed
-  checkBlackHoleSizeForCameraAdjustment() {
-    if (!this.blackHole || !this.camera) return;
-    
-    // Get the current black hole radius
-    const blackHoleRadius = this.blackHole.getRadius();
-    
-    // Compare to half the screen size (use the smaller dimension)
-    const screenThreshold = Math.min(this.gameWidth, this.gameHeight) / 2;
-    
-    if (blackHoleRadius > screenThreshold * 0.5) {
-      // Black hole is getting too large
-      if (!this.cameraSizeThresholdTriggered && !this.cameraAnimationActive) {
-        // Start the delay timer
-        this.cameraSizeThresholdTriggered = true;
-        this.cameraSizeThresholdTimestamp = performance.now() / 1000;
-        console.log("Black hole size threshold reached, waiting for delay before camera animation");
-      } else if (!this.cameraAnimationActive) {
-        // Check if delay has passed
-        const currentTime = performance.now() / 1000;
-        const elapsedDelay = currentTime - this.cameraSizeThresholdTimestamp;
-        
-        if (elapsedDelay >= this.cameraSizeThresholdDelay) {
-          // Start camera animation
-          this.startCameraAnimation();
-        }
-      }
-    } else if (blackHoleRadius < screenThreshold * 0.25 && this.camera.position.z > 90) {
-      // Black hole has become small enough and camera is still zoomed out
-      // Reset camera position (with animation)
-      if (!this.cameraAnimationActive) {
-        this.resetCameraPosition();
-      }
-      
-      // Reset threshold flag
-      this.cameraSizeThresholdTriggered = false;
-    } else {
-      // Reset threshold flag when size is normal
-      this.cameraSizeThresholdTriggered = false;
-    }
-  }
-  
-  // New method to reset camera position
-  resetCameraPosition() {
-    if (this.cameraAnimationActive) return;
-    
-    console.log("Resetting camera position");
-    
-    // Store current camera position
-    this.cameraOriginalPosition.copy(this.camera.position);
-    
-    // Target the initial camera position
-    this.cameraTargetPosition.set(0, 0, 80);
-    
-    // Set animation parameters
-    this.cameraAnimationActive = true;
-    this.cameraAnimationStartTime = performance.now() / 1000;
-    this.cameraAnimationDuration = 3.0; // Slightly longer duration for reset
-  }
-  
-  // New method to start camera animation
-  startCameraAnimation() {
-    if (this.cameraAnimationActive) return;
-    
-    console.log("Starting camera animation to zoom out");
-    
-    // Store current camera position
-    this.cameraOriginalPosition.copy(this.camera.position);
-    
-    // Calculate target position (move camera up/back to see more)
-    // Make the camera movement proportional to the black hole size
-    const blackHoleRadius = this.blackHole.getRadius();
-    const screenThreshold = Math.min(this.gameWidth, this.gameHeight) / 2;
-    const sizeFactor = blackHoleRadius / screenThreshold;
-    
-    // Calculate how much to move the camera based on black hole size
-    // Larger black holes need more camera movement
-    const zOffset = this.gameHeight * 0.5 * Math.max(1, sizeFactor);
-    
-    this.cameraTargetPosition.set(
-      this.camera.position.x,
-      this.camera.position.y,
-      this.camera.position.z + zOffset
-    );
-    
-    console.log(`Camera moving from z=${this.camera.position.z} to z=${this.cameraTargetPosition.z}`);
-    
-    // Set animation parameters
-    this.cameraAnimationActive = true;
-    this.cameraAnimationStartTime = performance.now() / 1000;
-    
-    // Reset threshold trigger
-    this.cameraSizeThresholdTriggered = false;
-  }
-  
-  // New method to update camera animation
+  // Empty placeholder function to avoid reference errors
   updateCameraAnimation(deltaTime) {
-    if (!this.cameraAnimationActive) return;
-    
-    const currentTime = performance.now() / 1000;
-    const elapsedTime = currentTime - this.cameraAnimationStartTime;
-    
-    if (elapsedTime >= this.cameraAnimationDuration) {
-      // Animation complete
-      this.camera.position.copy(this.cameraTargetPosition);
-      this.cameraAnimationActive = false;
-      console.log("Camera animation completed");
-      return;
-    }
-    
-    // Calculate progress (0 to 1) with easing
-    const progress = elapsedTime / this.cameraAnimationDuration;
-    const easedProgress = this.easeOutQuad(progress);
-    
-    // Interpolate camera position
-    this.camera.position.lerpVectors(
-      this.cameraOriginalPosition,
-      this.cameraTargetPosition,
-      easedProgress
-    );
-    
-    // Update orthographic camera projection
-    this.updateOrthographicCamera();
+    // This function is intentionally left empty
+    // The automatic camera adjustment feature has been disabled
+    return;
   }
   
   // Helper method for easing animation
@@ -1845,12 +1753,16 @@ window.Game = class Game {
       console.log(`Frame: ${this.frameCount}, Objects: ${this.celestialObjects.length}, BlackHole: ${this.blackHole?.mass.toFixed(2)}`);
     }
     
-    // Update camera controls via interaction system
+    // 1. First update camera controls via interaction system
+    // This should happen before any game logic updates
     if (this.interaction) {
       this.interaction.update(deltaTime);
     }
     
-    // Update game logic
+    // 2. Call the empty updateCameraAnimation function (disabled but maintained for reference consistency)
+    this.updateCameraAnimation(deltaTime);
+    
+    // 3. Then update gameplay elements
     this.update(deltaTime);
     
     // CRITICAL: Simplified rendering logic to ensure we see something

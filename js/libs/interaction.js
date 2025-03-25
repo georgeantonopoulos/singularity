@@ -35,6 +35,8 @@ export class Interaction {
     // Camera control state
     this.camera = null;
     this.isPanning = false;
+    this.isZooming = false; // Add flag to track active zooming
+    this.zoomTimeout = null; // For tracking zoom activity
     this.panStartX = 0;
     this.panStartY = 0;
     this.cameraStartX = 0;
@@ -174,12 +176,17 @@ export class Interaction {
       event.stopPropagation();
       event.stopImmediatePropagation();
       
+      // Calculate pan amount based on mouse movement
       const deltaX = (event.clientX - this.panStartX) * this.options.panSpeed * 0.01;
       const deltaY = (event.clientY - this.panStartY) * this.options.panSpeed * 0.01;
       
       // Set target positions for smooth easing
       this.targetCameraX = this.cameraStartX - deltaX;
       this.targetCameraY = this.cameraStartY + deltaY; // Invert Y for natural panning
+      
+      // When panning, update camera position directly for immediate feedback
+      this.camera.position.x = this.targetCameraX;
+      this.camera.position.y = this.targetCameraY;
       
       // Call pan callbacks
       this.callbacks.pan.forEach(callback => callback({
@@ -188,6 +195,9 @@ export class Interaction {
         x: this.targetCameraX,
         y: this.targetCameraY
       }));
+      
+      // Set a flag on the event to mark it as handled
+      event._handledByInteraction = true;
       
       // Return false to really ensure the event is completely stopped
       return false;
@@ -226,11 +236,19 @@ export class Interaction {
         this.cameraStartX = this.camera.position.x;
         this.cameraStartY = this.camera.position.y;
         this.canvas.style.cursor = 'grabbing'; // Visual feedback
+        
+        // Set a flag directly on the event to mark it as handled
+        // This is a non-standard property but helps with our custom handling
+        event._handledByInteraction = true;
       }
       
       return false;
     } else if (event.button === 2) {
       this.mouse.rightDown = true;
+      
+      // Prevent event propagation for right click too
+      event.preventDefault();
+      event.stopPropagation();
     }
     
     if (this.options.preventDefault) {
@@ -264,7 +282,14 @@ export class Interaction {
       this.canvas.style.cursor = 'default';
       
       // Stop event propagation
+      event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation();
+      
+      // Mark as handled
+      event._handledByInteraction = true;
+      
+      return false;
     } else if (event.button === 2) {
       this.mouse.rightDown = false;
     }
@@ -284,6 +309,19 @@ export class Interaction {
     
     // Only handle zooming if enabled and we have a camera
     if (!this.options.zoomEnabled || !this.camera) return;
+    
+    // Set zooming flag to true
+    this.isZooming = true;
+    
+    // Clear any existing timeout
+    if (this.zoomTimeout) {
+      clearTimeout(this.zoomTimeout);
+    }
+    
+    // Set a timeout to reset the zooming flag after a short delay
+    this.zoomTimeout = setTimeout(() => {
+      this.isZooming = false;
+    }, 300); // 300ms delay
     
     // Use deltaY for more consistent behavior across browsers
     // Note: deltaY is positive when scrolling down and negative when scrolling up
@@ -413,19 +451,27 @@ export class Interaction {
     const scaledEaseAmount = Math.min(1.0, easeAmount * (deltaTime * 60)); // Scale by target 60 FPS
     
     // Handle pan position easing
-    if (!this.mouse.middleDown) {
+    if (this.isPanning) {
+      // Direct positioning while actively panning - no easing
+      this.camera.position.x = this.targetCameraX;
+      this.camera.position.y = this.targetCameraY;
+    } else {
       // Only apply easing when not actively panning
       this.camera.position.x += (this.targetCameraX - this.camera.position.x) * scaledEaseAmount;
       this.camera.position.y += (this.targetCameraY - this.camera.position.y) * scaledEaseAmount;
-    } else {
-      // Direct positioning while actively panning
-      this.camera.position.x = this.targetCameraX;
-      this.camera.position.y = this.targetCameraY;
     }
     
     // Handle zoom easing - use stronger easing for zoom to make it feel snappier
     const zoomEaseAmount = Math.min(1.0, (easeAmount * 1.2) * (deltaTime * 60));
-    this.camera.position.z += (this.targetCameraZ - this.camera.position.z) * zoomEaseAmount;
+    
+    // If actively zooming, use direct positioning for immediate feedback
+    if (this.isZooming) {
+      // More responsive zoom - faster easing when actively zooming
+      this.camera.position.z += (this.targetCameraZ - this.camera.position.z) * zoomEaseAmount * 2.0;
+    } else {
+      // Normal easing when not actively zooming
+      this.camera.position.z += (this.targetCameraZ - this.camera.position.z) * zoomEaseAmount;
+    }
     
     // Update camera look target to match panning
     this.camera.lookAt(
