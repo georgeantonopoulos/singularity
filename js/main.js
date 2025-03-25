@@ -178,14 +178,24 @@ window.Game = class Game {
     
     // Smoothly move black hole towards target position (lerp)
     if (this.targetPosition) {
-      // Calculate distance to target
-      const distance = this.blackHole.position.distanceTo(this.targetPosition);
+      // Calculate distance to target (only x and y components)
+      const xyDistance = Math.sqrt(
+        Math.pow(this.blackHole.position.x - this.targetPosition.x, 2) +
+        Math.pow(this.blackHole.position.y - this.targetPosition.y, 2)
+      );
       
       // Only update if we're not already very close
-      if (distance > 0.1) {
+      if (xyDistance > 0.1) {
+        // Create a temporary target that preserves the z position
+        const tempTarget = new THREE.Vector3(
+          this.targetPosition.x,
+          this.targetPosition.y,
+          this.blackHole.position.z  // Keep original z position
+        );
+        
         // Use a smaller lerp factor for slower movement
-        const slowLerpFactor = this.lerpFactor * 0.3; // Half the original speed
-        this.blackHole.position.lerp(this.targetPosition, slowLerpFactor);
+        const slowLerpFactor = this.lerpFactor * 0.3; // Slower speed
+        this.blackHole.position.lerp(tempTarget, slowLerpFactor);
         
         // Update the visual representation (group or mesh)
         if (this.blackHole.group) {
@@ -791,8 +801,10 @@ window.Game = class Game {
       this.createAbsorptionEffect(object.position);
     };
     
-    // Position the black hole at center initially
-    this.blackHole.position = new THREE.Vector3(0, 0, 0);
+    // Keep the x,y position at the center initially, but preserve the z position from BlackHole class
+    this.blackHole.position.x = 0;
+    this.blackHole.position.y = 0;
+    // z position is already set in the BlackHole constructor
     
     // Add the black hole to the scene - use the group if available, otherwise use mesh
     if (this.blackHole.group) {
@@ -802,6 +814,9 @@ window.Game = class Game {
       this.blackHole.mesh.position.copy(this.blackHole.position);
       this.scene.add(this.blackHole.mesh);
     }
+    
+    // Log the black hole's position for debugging
+    console.log("Black hole created at position:", this.blackHole.position);
     
     // Set up lens effect - this is now using a fallback renderer
     this.setupLensEffect();
@@ -1811,6 +1826,17 @@ window.Game = class Game {
     if (this.blackHole) {
       console.log("Setting up basic black hole visualization");
       
+      // First clean up any existing effects that might be in the scene
+      if (this.blackHoleGlow && this.scene.children.includes(this.blackHoleGlow)) {
+        this.scene.remove(this.blackHoleGlow);
+        this.blackHoleGlow = null;
+      }
+      
+      if (this.accretionDisk && this.scene.children.includes(this.accretionDisk)) {
+        this.scene.remove(this.accretionDisk);
+        this.accretionDisk = null;
+      }
+      
       // Check if event horizon exists and has material
       if (this.blackHole.eventHorizon && this.blackHole.eventHorizon.material) {
         // Make sure the black hole's event horizon is visible but still partially transparent
@@ -1819,25 +1845,37 @@ window.Game = class Game {
       
       // Create a simple glow effect if it doesn't exist yet
       if (!this.blackHoleGlow) {
-        const glowGeometry = new THREE.SphereGeometry(this.blackHole.getRadius() * 3, 32, 32);
+        // Create glow that's attached to the black hole group
+        const glowGeometry = new THREE.SphereGeometry(this.blackHole.getRadius() * 2.8, 32, 32);
         const glowMaterial = new THREE.MeshBasicMaterial({
-          color: 0x220044,
+          color: 0x220066, // More vibrant purple
           transparent: true,
-          opacity: 0.3,
-          side: THREE.BackSide
+          opacity: 0.4,
+          side: THREE.BackSide,
+          depthWrite: false // Important for proper blending
         });
         
         this.blackHoleGlow = new THREE.Mesh(glowGeometry, glowMaterial);
-        this.blackHoleGlow.position.copy(this.blackHole.position);
-        this.scene.add(this.blackHoleGlow);
-        console.log("Added blackhole glow effect");
+        
+        // Always add to the group for proper transform inheritance
+        if (this.blackHole.group) {
+          // Add with zero local position since group already has the proper position
+          this.blackHoleGlow.position.set(0, 0, 0);
+          this.blackHole.group.add(this.blackHoleGlow);
+          console.log("Added blackhole glow effect to black hole group");
+        } else {
+          // Fallback to scene placement if no group exists
+          this.blackHoleGlow.position.copy(this.blackHole.position);
+          this.scene.add(this.blackHoleGlow);
+          console.log("Added blackhole glow effect to scene");
+        }
       }
       
       // Create accretion disk with better shader for lens effect integration
       const diskGeometry = new THREE.RingGeometry(
-        this.blackHole.getRadius() * 2.2,
-        this.blackHole.getRadius() * 4,
-        32, 
+        this.blackHole.getRadius() * 2.1,
+        this.blackHole.getRadius() * 3.2,
+        48, 
         2
       );
       
@@ -1846,8 +1884,8 @@ window.Game = class Game {
         uniforms: {
           time: { value: 0 },
           radius: { value: this.blackHole.getRadius() },
-          color: { value: new THREE.Color(0x304060) }, // Subtle blue
-          opacity: { value: 0.4 }
+          color: { value: new THREE.Color(0x304080) }, // More vibrant blue
+          opacity: { value: 0.5 }
         },
         vertexShader: `
           varying vec2 vUv;
@@ -1895,30 +1933,45 @@ window.Game = class Game {
       });
       
       this.accretionDisk = new THREE.Mesh(diskGeometry, diskMaterial);
-      this.accretionDisk.position.copy(this.blackHole.position);
-      this.accretionDisk.rotation.x = Math.PI / 2;
-      this.scene.add(this.accretionDisk);
-      console.log("Added accretion disk with shader material");
+      
+      // Always add to the group for proper transform inheritance
+      if (this.blackHole.group) {
+        // Set the rotation before adding to the group
+        this.accretionDisk.rotation.x = Math.PI / 2;
+        this.accretionDisk.position.set(0, 0, 0); // Local position is zero
+        this.blackHole.group.add(this.accretionDisk);
+        console.log("Added accretion disk to black hole group");
+      } else {
+        // Fallback to scene placement if no group exists
+        this.accretionDisk.position.copy(this.blackHole.position);
+        this.accretionDisk.rotation.x = Math.PI / 2;
+        this.scene.add(this.accretionDisk);
+        console.log("Added accretion disk to scene");
+      }
       
       // Adding a simple update function for the glow and disk
       this.updateBasicRenderer = (deltaTime) => {
         const time = performance.now() * 0.001; // Current time in seconds
         
-        if (this.blackHoleGlow) {
+        // Only need to maintain manual positioning if objects aren't in the group
+        if (this.blackHoleGlow && !this.blackHole.group.children.includes(this.blackHoleGlow)) {
           this.blackHoleGlow.position.copy(this.blackHole.position);
-          this.blackHoleGlow.scale.set(
-            1.0 + this.blackHole.mass * 0.1,
-            1.0 + this.blackHole.mass * 0.1,
-            1.0 + this.blackHole.mass * 0.1
-          );
+          // Scale with mass for visual growth
+          const glowScale = 1.0 + this.blackHole.mass * 0.1;
+          this.blackHoleGlow.scale.set(glowScale, glowScale, glowScale);
         }
         
-        if (this.accretionDisk) {
+        // Only need to maintain manual positioning if objects aren't in the group
+        if (this.accretionDisk && !this.blackHole.group.children.includes(this.accretionDisk)) {
           this.accretionDisk.position.copy(this.blackHole.position);
+        }
+        
+        // Always update rotation for spinning effect, regardless of parent
+        if (this.accretionDisk) {
           this.accretionDisk.rotation.z += deltaTime * 0.2;
           
           // Update time in the shader
-          if (this.accretionDisk.material.uniforms) {
+          if (this.accretionDisk.material && this.accretionDisk.material.uniforms) {
             this.accretionDisk.material.uniforms.time.value = time;
           }
         }

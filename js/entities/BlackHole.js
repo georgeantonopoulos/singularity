@@ -4,7 +4,7 @@ import { vertexShader, fragmentShader, accretionDiskVertexShader, accretionDiskF
 export class BlackHole {
   constructor(options = {}) {
     this.mass = options.initialMass || 1; // In solar mass units
-    this.position = new THREE.Vector3(0, 0, 0);
+    this.position = new THREE.Vector3(0, 0, -120); // Position the black hole much deeper in 3D space
     this.gravitationalConstant = 0.25; // Increased for stronger pull (was 0.1)
     this.absorbThreshold = 2.0; // Significantly increased for better gameplay
     this.eventHorizonVisuals = options.eventHorizonVisuals !== undefined ? options.eventHorizonVisuals : true;
@@ -15,8 +15,10 @@ export class BlackHole {
   }
   
   createMesh() {
-    const geometry = new THREE.SphereGeometry(this.getRadius(), 32, 32);
+    const baseRadius = this.getRadius() * 3.5;
+    const geometry = new THREE.SphereGeometry(baseRadius, 32, 32);
     
+    // Update the material to ensure glow is at exact perimeter
     const material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
@@ -46,65 +48,54 @@ export class BlackHole {
         varying vec3 vNormal;
         
         void main() {
-          // Calculate normalized position from center
           vec3 nPos = normalize(vPosition);
           vec3 nNormal = normalize(vNormal);
           
-          // Calculate rim lighting effect
-          float rimLight = pow(1.0 - abs(dot(nNormal, vec3(0.0, 0.0, 1.0))), 2.0);
+          // Sharper rim lighting with exact perimeter glow
+          float rimLight = pow(1.0 - abs(dot(nNormal, vec3(0.0, 0.0, 1.0))), 8.0);
           
-          // Pure black color with rim effect
-          vec3 color = vec3(0.0, 0.0, 0.0);
+          vec3 color = vec3(0.0);
           
-          // Add subtle deep blue glow at the edges
-          color += vec3(0.0, 0.0, 0.1) * rimLight;
+          // Add blue glow exactly at perimeter
+          float edgeGlow = smoothstep(0.5, 1.0, rimLight);
+          color += vec3(0.0, 0.0, 0.3) * edgeGlow;
           
-          gl_FragColor = vec4(color, 1.0); // Completely opaque black hole
+          gl_FragColor = vec4(color, 1.0);
         }
       `,
       side: THREE.FrontSide,
-      transparent: false, // Keep it opaque, we'll rely on proper depth testing
-      depthWrite: true,   // Enable depth writing
-      depthTest: true     // Enable depth testing
+      transparent: false,
+      depthWrite: true,
+      depthTest: true
     });
     
     this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.position.copy(this.position);
     
-    // CRITICAL: Removed negative render order to allow proper depth testing
-    // The black hole should now naturally render based on its z-position
-    // Objects in front of it will render in front, objects behind it will render behind
+    this.group = new THREE.Group();
+    this.group.position.copy(this.position);
     
-    // Create an event horizon layer as a separate mesh with a slightly larger radius
-    const eventHorizonGeometry = new THREE.SphereGeometry(this.getRadius() * 1.05, 32, 32);
+    this.mesh.position.set(0, 0, 0);
+    this.group.add(this.mesh);
+    
+    // Create event horizon with enhanced glow
+    const eventHorizonGeometry = new THREE.SphereGeometry(this.getRadius() * 1.3, 32, 32);
     const eventHorizonMaterial = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        radius: { value: this.getRadius() * 1.05 }
+        radius: { value: this.getRadius() * 1.3 }
       },
       vertexShader: vertexShader,
       fragmentShader: fragmentShader,
       transparent: true,
       opacity: 0.8,
-      depthWrite: false, // Critical: Don't write to depth buffer for outer glow
-      depthTest: true,   // But still test against it
-      side: THREE.BackSide // Render inside of sphere
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.BackSide
     });
     
     this.eventHorizon = new THREE.Mesh(eventHorizonGeometry, eventHorizonMaterial);
-    this.eventHorizon.position.copy(this.position);
-    
-    // Create a group to hold the black hole and its event horizon
-    this.group = new THREE.Group();
-    this.group.add(this.mesh);
+    this.eventHorizon.position.set(0, 0, 0);
     this.group.add(this.eventHorizon);
-    
-    // Add to parent object or scene
-    if (this.parent) {
-      this.parent.add(this.group);
-    } else if (this.scene) {
-      this.scene.add(this.group);
-    }
     
     return this.group;
   }
@@ -136,107 +127,94 @@ export class BlackHole {
   
   getRadius() {
     // Black hole radius scales with mass (simplified for gameplay)
-    return Math.pow(this.mass, 1/3) * 0.6;
+    // Increase base size to ensure visibility
+    return Math.pow(this.mass, 1/3) * 3.0; // Much larger base size
   }
   
-  getGravitationalPull(objectPosition, objectMass) {
-    // Calculate gravitational force between black hole and object
+  getGravitationalPull(objectPosition, objectMass, celestialObject) {
     const direction = new THREE.Vector3().subVectors(this.position, objectPosition);
     const distance = direction.length();
     
-    // Prevent division by zero or very small numbers
-    if (distance < 0.1) {
-      return new THREE.Vector3(0, 0, 0);
-    }
+    if (distance < 0.1) return new THREE.Vector3(0, 0, 0);
     
-    // Calculate x,y alignment factor (how well the black hole is aligned with the object)
-    // This is the key gameplay mechanic - alignment increases gravitational pull
+    // Calculate XY distance (projected distance in XY plane)
     const xyDistance = Math.sqrt(
       Math.pow(this.position.x - objectPosition.x, 2) +
       Math.pow(this.position.y - objectPosition.y, 2)
     );
+    
+    // Calculate Z distance separately
     const zDistance = Math.abs(this.position.z - objectPosition.z);
     
-    // Calculate alignment factor - higher when xy-distance is small compared to z-distance
-    // Using a much wider detection radius - similar to the visual indicator in main.js
-    // Scale detection radius with black hole mass
-    const maxAlignmentDistance = 15 * Math.pow(this.mass, 0.33); // Scales with black hole mass
-    let alignmentFactor = 1.0; // Default/minimum factor
+    // Get the black hole's visual perimeter radius (where the blue glow is)
+    const perimeterRadius = this.getRadius() * 3.5;
     
-    if (xyDistance < maxAlignmentDistance) {
-      // Calculate alignment precision - 1.0 is perfect alignment, 0.0 is no alignment
-      const alignmentPrecision = 1.0 - (xyDistance / maxAlignmentDistance);
+    // Calculate how close the object is to the perimeter in XY plane
+    const distanceFromPerimeter = Math.abs(xyDistance - perimeterRadius);
+    const perimeterAlignmentThreshold = perimeterRadius * 0.3; // 30% of perimeter radius
+    
+    // Calculate perimeter alignment factor (1.0 = perfect alignment, 0.0 = no alignment)
+    let perimeterAlignmentFactor = 0.0;
+
+    // Check if object has an active trajectory line
+    const hasTrajectory = celestialObject && celestialObject.trajectoryLine;
+    
+    if (hasTrajectory || distanceFromPerimeter < perimeterAlignmentThreshold) {
+      // Apply boost for either trajectory or close perimeter alignment
+      perimeterAlignmentFactor = Math.pow(
+        1.0 - (distanceFromPerimeter / perimeterAlignmentThreshold),
+        2.0
+      ) * 500.0; // Massive boost when aligned with perimeter or has trajectory
       
-      // Exponential curve for stronger effect at better alignment
-      // Scale alignment boost with black hole mass
-      const alignmentBoost = Math.pow(alignmentPrecision, 2) * 100.0 * Math.pow(this.mass, 0.25);
-      alignmentFactor = 1.0 + alignmentBoost;
-      
-      // Debug log when strong alignment is detected
-      if (alignmentFactor > 3.0) {
-        console.log(`Very strong alignment (${alignmentFactor.toFixed(2)}x) with object at xy-distance: ${xyDistance.toFixed(2)}`);
+      // Extra boost when trajectory is active
+      if (hasTrajectory) {
+        perimeterAlignmentFactor *= 1.5; // 50% stronger when trajectory is shown
       }
     }
     
-    // Calculate force magnitude using modified gravitational formula
+    // Enhanced Z-axis detection radius - much larger than before
+    const maxAlignmentDistance = 15 * Math.pow(this.mass, 0.33);
+    const maxZAlignmentDistance = maxAlignmentDistance * 5; // Increased Z detection range
+    
+    // Calculate Z-axis alignment with higher base force
+    const zAlignmentFactor = zDistance < maxZAlignmentDistance ? 
+      Math.pow(1.0 - (zDistance / maxZAlignmentDistance), 2) * 8.0 : 1.0;
+    
+    // Combine alignment factors - perimeter alignment now dominates
+    let alignmentFactor = 1.0 + perimeterAlignmentFactor;
+    
+    // Calculate force magnitude with enhanced perimeter effect
+    const eventHorizonRadius = this.getRadius() * 5 * Math.pow(this.mass, 0.33);
     let forceMagnitude;
     
-    // Event horizon-like effect: extreme pull when very close
-    // Scale event horizon radius with black hole mass
-    const eventHorizonRadius = this.getRadius() * 5 * Math.pow(this.mass, 0.33);
     if (distance < eventHorizonRadius) {
-      // Exponential increase in force as objects get very close
-      // This creates a "point of no return" effect
       const proximityFactor = 1.0 - Math.pow(distance / eventHorizonRadius, 2);
-      forceMagnitude = this.gravitationalConstant * this.mass * objectMass * (2.0 + 8.0 * proximityFactor) / (distance * distance);
-      
-      // Apply alignment factor here too for consistent behavior
-      forceMagnitude *= alignmentFactor;
+      forceMagnitude = this.gravitationalConstant * this.mass * objectMass * 
+                       (2.0 + 8.0 * proximityFactor) / (distance * distance);
     } else {
-      // Normal gravitational force for further objects
-      // F = G * (m1 * m2) / r^2 with distance-based blending to linear falloff
       const invSquare = this.gravitationalConstant * this.mass * objectMass / (distance * distance);
       const invLinear = this.gravitationalConstant * this.mass * objectMass / distance;
       let t = (distance - 30) / 20;
       t = Math.max(0, Math.min(1, t));
       forceMagnitude = (1 - t) * invSquare + t * invLinear;
-      
-      // Apply alignment factor
-      forceMagnitude *= alignmentFactor;
     }
     
-    // Ensure minimum force magnitude that scales with object mass
+    // Apply combined alignment factors
+    forceMagnitude *= (alignmentFactor * Math.max(1.0, zAlignmentFactor));
+    
+    // Ensure minimum force
     const minForceMagnitude = 0.01 * objectMass;
-    if (forceMagnitude < minForceMagnitude) {
-      forceMagnitude = minForceMagnitude;
-    }
+    forceMagnitude = Math.max(forceMagnitude, minForceMagnitude);
     
-    // Normalize direction to get correct 3D direction
     const normalizedDirection = direction.clone().normalize();
     
-    // Calculate z-component force factor
-    // This enhances the z-axis pull to make depth movement more visible
-    let zForceFactor = 1.0;
-    
-    // Enhance z-force based on alignment - key gameplay aspect
-    // When aligned, we want to rapidly pull the object along the z-axis
-    if (xyDistance < maxAlignmentDistance) {
-      // Stronger z-force when aligned, scales with alignment precision
-      const alignmentPrecision = 1.0 - (xyDistance / maxAlignmentDistance);
-      
-      // Significantly increased z-force multiplier (from 3.0 to 6.0) for more dramatic z-movement when aligned
-      const zAlignmentBoost = 1.0 + Math.pow(alignmentPrecision, 2) * 6.0; // Up to 7x z-force when perfectly aligned
-      
-      zForceFactor = Math.max(zForceFactor, zAlignmentBoost);
-    } 
-    // Also keep the previous z-force enhancement for objects at different depths
-    else if (xyDistance < this.getRadius() * 3 && zDistance > 5) {
-      // Object is aligned with black hole in x-y plane but at different z-depth
-      // Enhance z-force to create more visible depth movement
-      zForceFactor = 2.0 + Math.min(zDistance / 30, 2.0);
+    // Enhanced Z-force calculation with perimeter consideration
+    let zForceFactor = Math.max(2.0, zAlignmentFactor * 4.0);
+    if (perimeterAlignmentFactor > 0) {
+      zForceFactor *= (1.0 + perimeterAlignmentFactor * 0.5); // Boost Z-force when near perimeter
     }
     
-    // Create the final 3D force vector with enhanced z-component
+    // Create final force vector with enhanced Z-component
     const force = new THREE.Vector3(
       normalizedDirection.x * forceMagnitude,
       normalizedDirection.y * forceMagnitude,
@@ -247,10 +225,12 @@ export class BlackHole {
   }
   
   increaseMass(amount) {
-    this.mass += amount;
+    // Increase mass gain for more noticeable growth
+    const growthFactor = 0.5; // Increased from 0.025
+    this.mass += amount * growthFactor;
     
     // Log the mass increase for debugging
-    console.log(`Black hole mass increased by ${amount.toFixed(2)} to ${this.mass.toFixed(2)}`);
+    console.log(`Black hole mass increased by ${(amount * growthFactor).toFixed(2)} to ${this.mass.toFixed(2)}`);
     
     // Update shader uniforms for all children
     if (this.mesh && this.mesh.material && this.mesh.material.uniforms) {
@@ -275,7 +255,7 @@ export class BlackHole {
       
       // Update event horizon uniforms
       if (this.eventHorizon.material && this.eventHorizon.material.uniforms) {
-        this.eventHorizon.material.uniforms.radius.value = currentRadius * 1.05;
+        this.eventHorizon.material.uniforms.radius.value = currentRadius * 1.3;
       }
     }
     
@@ -455,7 +435,7 @@ export class BlackHole {
     this.frameCount = (this.frameCount || 0) + 1;
   }
   
-  // Get screen position for lens effect
+  // Enhanced getScreenPosition method that's more robust for lens effect
   getScreenPosition(camera) {
     // Use the provided camera or the stored camera reference
     const cam = camera || this.camera;
@@ -468,21 +448,32 @@ export class BlackHole {
     // Project to normalized device coordinates
     vector.project(cam);
     
+    // Handle out-of-frustum case to prevent errors
+    if (Math.abs(vector.x) > 1 || Math.abs(vector.y) > 1 || Math.abs(vector.z) > 1) {
+      // Black hole is outside camera frustum, provide safe fallback
+      return { x: window.innerWidth/2, y: window.innerHeight/2 };
+    }
+    
     // Convert from NDC (-1 to 1) to screen coordinates
     const screenPosition = {
       x: (vector.x + 1) * window.innerWidth / 2,
       y: (-vector.y + 1) * window.innerHeight / 2  // Y is flipped in WebGL
     };
     
+    // Add slight debug - can be removed in production
+    // console.log("Black hole 3D->2D: pos:", this.position, "screen:", screenPosition);
+    
     return screenPosition;
   }
   
-  // Get properties needed for post-processing lens effect
+  // Enhanced properties for lens effect with improved camera distance scaling
   getLensEffectProperties() {
     return {
       position: this.position.clone(),      // 3D world position
       radius: this.getRadius(),             // Current radius in world units
-      mass: this.mass                       // Current mass value
+      mass: this.mass,                      // Current mass value
+      // Add camera distance scale factor for better lens effect
+      cameraDistance: this.camera ? this.camera.position.distanceTo(this.position) : 90
     };
   }
 } 

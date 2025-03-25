@@ -507,37 +507,12 @@ export class CelestialObject {
     } else {
       // Otherwise update physics based on black hole gravity (if blackHole is provided)
       if (blackHole) {
-        // Calculate distance to black hole
-        const distance = this.position.distanceTo(blackHole.position);
+        // Get the sophisticated gravitational pull from the black hole
+        const blackHoleForce = blackHole.getGravitationalPull(this.position, this.mass);
         
-        // Scale influence radius based on black hole mass
-        const blackHoleInfluenceRadius = blackHole.getRadius() * 15 * Math.pow(blackHole.mass, 0.33);
-        
-        if (distance < blackHoleInfluenceRadius) {
-          // Calculate gravitational force
-          const G = 0.25; // Gravitational constant (scaled for game)
-          
-          // Get vector from this object to black hole
-          const direction = new THREE.Vector3().subVectors(blackHole.position, this.position);
-          const safeDistance = Math.max(0.5, distance); // Prevent extreme forces
-          direction.normalize(); // Normalize to get direction
-          
-          // Calculate force magnitude (F = G * (m1 * m2) / r^2)
-          // Scale force by distance - stronger pull when closer to black hole
-          const distanceFactor = Math.pow(1 - Math.min(1, distance / blackHoleInfluenceRadius), 2);
-          
-          // Scale force by black hole mass - larger black holes have stronger pull
-          const blackHoleMassFactor = Math.pow(blackHole.mass, 0.5);
-          
-          const forceMagnitude = G * (blackHole.mass * this.mass) / (safeDistance * safeDistance) * 
-                               (0.2 + 0.8 * distanceFactor) * blackHoleMassFactor;
-          
-          // Apply force as acceleration (F = ma, so a = F/m)
-          const acceleration = direction.multiplyScalar(forceMagnitude / this.mass);
-          
-          // Update velocity
-          this.velocity.add(acceleration.multiplyScalar(deltaTime));
-        }
+        // Apply the force as acceleration (F = ma, so a = F/m)
+        const acceleration = blackHoleForce.divideScalar(this.mass);
+        this.velocity.add(acceleration.multiplyScalar(deltaTime));
       }
     }
     
@@ -549,8 +524,8 @@ export class CelestialObject {
     if (this.mesh) {
       this.mesh.position.copy(this.position);
       
-      // Apply rotation to all object types - this was missing for planets and debris
-      this.mesh.rotation.y += this.rotationSpeed * deltaTime * 5; // Scale for better visual effect
+      // Apply rotation to all object types
+      this.mesh.rotation.y += this.rotationSpeed * deltaTime * 5;
     }
     
     // If this is a star, apply small random motion
