@@ -177,8 +177,155 @@ window.Game = class Game {
       }
     }
     
+    // Check for alignment with celestial objects and create visual cue
+    this.checkAlignmentWithObjects();
+    
     // Check if black hole has grown too large and needs camera adjustment
     this.checkBlackHoleSizeForCameraAdjustment();
+  }
+  
+  // New method to check for alignment with celestial objects
+  checkAlignmentWithObjects() {
+    if (!this.blackHole || !this.celestialObjects || this.celestialObjects.length === 0) return;
+    
+    // Remove existing alignment indicator if present
+    if (this.alignmentIndicator) {
+      this.scene.remove(this.alignmentIndicator);
+      this.alignmentIndicator = null;
+    }
+    
+    // Calculate a much wider radius for alignment detection
+    // Using a significant portion of the game area width for wider detection
+    const alignmentRadius = this.gameWidth * 0.15; // Much wider alignment radius - 15% of game width
+    
+    // Find nearby objects that might be aligned with the black hole
+    let closestAlignedObject = null;
+    let closestAlignmentDistance = Infinity;
+    let strongestAlignmentFactor = 0;
+    
+    for (const object of this.celestialObjects) {
+      if (object.isAbsorbed || object.isBeingAbsorbed) continue;
+      
+      // Calculate x,y distance (ignoring z)
+      const xyDistance = Math.sqrt(
+        Math.pow(this.blackHole.position.x - object.position.x, 2) +
+        Math.pow(this.blackHole.position.y - object.position.y, 2)
+      );
+      
+      // If within alignment threshold - now using much wider radius
+      if (xyDistance < alignmentRadius) {
+        // Calculate alignment precision (1.0 = perfect alignment)
+        const alignmentPrecision = 1.0 - (xyDistance / alignmentRadius);
+        const alignmentFactor = 1.0 + Math.pow(alignmentPrecision, 2) * 3.0;
+        
+        // Lower threshold to consider alignment (from 1.2 to 1.1)
+        if (xyDistance < closestAlignmentDistance && alignmentFactor > 1.1) {
+          closestAlignmentDistance = xyDistance;
+          closestAlignedObject = object;
+          strongestAlignmentFactor = alignmentFactor;
+        }
+      }
+    }
+    
+    // If we found an aligned object, create a visual indicator
+    if (closestAlignedObject && strongestAlignmentFactor > 1.1) {
+      // Calculate intensity based on alignment strength (0.0 to 1.0)
+      const intensity = Math.min((strongestAlignmentFactor - 1.0) / 3.0, 1.0);
+      
+      // Create alignment line connecting black hole to object
+      const lineGeometry = new THREE.BufferGeometry();
+      const start = this.blackHole.position.clone();
+      const end = closestAlignedObject.position.clone();
+      
+      // Create points array for the line
+      const points = [start, end];
+      lineGeometry.setFromPoints(points);
+      
+      // Create a shader material with animation
+      const lineMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          color: { value: new THREE.Color(0x6699ff) }, // Blue alignment beam
+          intensity: { value: intensity * 0.7 },        // Scale down intensity a bit
+          dashSize: { value: 0.5 },
+          gapSize: { value: 0.5 },
+          time: { value: 0 }
+        },
+        vertexShader: `
+          uniform float time;
+          varying vec3 vPosition;
+          
+          void main() {
+            vPosition = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 color;
+          uniform float intensity;
+          uniform float dashSize;
+          uniform float gapSize;
+          uniform float time;
+          varying vec3 vPosition;
+          
+          void main() {
+            // Calculate distance along the line
+            float dist = length(vPosition);
+            
+            // Create animated dashed line effect
+            float pattern = fract((dist * 0.5 - time * 2.0) / (dashSize + gapSize));
+            float dash = step(pattern, dashSize / (dashSize + gapSize));
+            
+            // Pulse effect
+            float pulse = 0.8 + 0.2 * sin(time * 5.0);
+            
+            // Edge falloff for a smoother look
+            float edge = smoothstep(0.0, 0.1, abs(0.5 - pattern)) * 0.8 + 0.2;
+            
+            // Final color with all effects
+            vec3 finalColor = color * intensity * dash * edge * pulse;
+            float alpha = intensity * dash * edge * pulse * 0.8;
+            
+            gl_FragColor = vec4(finalColor, alpha);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      
+      // Create the line
+      this.alignmentIndicator = new THREE.Line(lineGeometry, lineMaterial);
+      this.scene.add(this.alignmentIndicator);
+      
+      // Store the start time for animation
+      this.alignmentIndicator.userData.startTime = performance.now() / 1000;
+      this.alignmentIndicator.userData.alignedObject = closestAlignedObject;
+      
+      // Add this to the animation update loop
+      if (!this.updateAlignmentIndicator) {
+        this.updateAlignmentIndicator = (deltaTime) => {
+          if (this.alignmentIndicator && this.alignmentIndicator.material) {
+            // Calculate elapsed time since creation
+            const currentTime = performance.now() / 1000;
+            const elapsedTime = currentTime - this.alignmentIndicator.userData.startTime;
+            
+            // Update shader time uniform
+            this.alignmentIndicator.material.uniforms.time.value = elapsedTime;
+            
+            // Update line positions if objects moved
+            const alignedObject = this.alignmentIndicator.userData.alignedObject;
+            if (this.blackHole && alignedObject && !alignedObject.isAbsorbed) {
+              const points = [
+                this.blackHole.position.clone(),
+                alignedObject.position.clone()
+              ];
+              this.alignmentIndicator.geometry.dispose();
+              this.alignmentIndicator.geometry = new THREE.BufferGeometry().setFromPoints(points);
+            }
+          }
+        };
+      }
+    }
   }
   
   // New method to check black hole size and trigger camera animation if needed
@@ -993,8 +1140,51 @@ window.Game = class Game {
     // Generate celestial objects in 3D space with subtle depth
     this.celestialObjects = [];
     
-    // Number of objects to generate - increased for a fuller game field
-    const objectCount = 70;
+    // Number of objects to generate - reduced to make room for galaxy clusters
+    const objectCount = 40;
+    
+    // Number of galaxy clusters to create
+    const clusterCount = 3;
+    this.galaxyClusters = [];
+    
+    // Generate galaxy clusters first
+    for (let i = 0; i < clusterCount; i++) {
+      // Position clusters further from center to avoid instant absorption
+      const clusterDistance = 30 + Math.random() * 25; // Minimum distance from center
+      const angle = Math.random() * Math.PI * 2;
+      const clusterX = Math.cos(angle) * clusterDistance;
+      const clusterY = Math.sin(angle) * clusterDistance;
+      const clusterZ = (Math.random() - 0.5) * 10; // Small z variation
+      
+      // Create random cluster type and size
+      const clusterTypes = ['standard', 'binary', 'dense', 'sparse'];
+      const clusterSizes = ['small', 'medium', 'large'];
+      const clusterType = clusterTypes[Math.floor(Math.random() * clusterTypes.length)];
+      const clusterSize = clusterSizes[Math.floor(Math.random() * clusterSizes.length)];
+      
+      // Create cluster
+      const cluster = new GalaxyCluster({
+        position: new THREE.Vector3(clusterX, clusterY, clusterZ),
+        type: clusterType,
+        size: clusterSize,
+        scene: this.scene
+      });
+      
+      // Add all objects from the cluster to the game
+      const clusterObjects = cluster.getAllObjects();
+      for (const obj of clusterObjects) {
+        // Add to game object list
+        this.celestialObjects.push(obj);
+        
+        // Add to scene if not already added
+        if (!obj.mesh.parent) {
+          this.scene.add(obj.mesh);
+        }
+      }
+      
+      // Store the cluster
+      this.galaxyClusters.push(cluster);
+    }
     
     for (let i = 0; i < objectCount; i++) {
       // Determine object type based on probabilities
@@ -1205,6 +1395,11 @@ window.Game = class Game {
     // Clear the array
     this.celestialObjects = [];
     
+    // Clear galaxy clusters array
+    if (this.galaxyClusters) {
+      this.galaxyClusters = [];
+    }
+    
     // Remove black hole
     if (this.blackHole) {
       if (this.blackHole.group) {
@@ -1245,6 +1440,11 @@ window.Game = class Game {
     
     // Update camera animation if active
     this.updateCameraAnimation(deltaTime);
+    
+    // Update alignment indicator if it exists
+    if (this.updateAlignmentIndicator) {
+      this.updateAlignmentIndicator(deltaTime);
+    }
     
     // If we're using the basic renderer, update it
     if (this.basicRendererActive && this.updateBasicRenderer) {
@@ -1315,6 +1515,14 @@ window.Game = class Game {
       // Update black hole (this will check for absorptions)
       this.blackHole.update(deltaTime, this.celestialObjects);
       
+      // Update galaxy clusters if they exist
+      if (this.galaxyClusters && this.galaxyClusters.length > 0) {
+        for (let i = 0; i < this.galaxyClusters.length; i++) {
+          // We don't need to update the cluster objects' physics here as they're already in the celestialObjects array
+          // Just update any cluster-specific properties if needed in future
+        }
+      }
+      
       // Update celestial objects
       for (let i = this.celestialObjects.length - 1; i >= 0; i--) {
         const object = this.celestialObjects[i];
@@ -1344,7 +1552,7 @@ window.Game = class Game {
         }
         
         // Update object position based on gravitational pull
-        object.update(deltaTime, this.blackHole);
+        object.update(deltaTime, this.blackHole, this.celestialObjects);
         
         // Update trajectory line if it exists
         if (object.trajectoryLine && !object.isAbsorbed && this.blackHole) {
@@ -1373,6 +1581,41 @@ window.Game = class Game {
       // Periodically add some objects to maintain visual interest, even if we're above the threshold
       if (this.frameCount % 300 === 0) {
         this.addMoreCelestialObjects(3);
+        
+        // Occasionally add a new galaxy cluster
+        if (Math.random() < 0.3 && (!this.galaxyClusters || this.galaxyClusters.length < 3)) {
+          // Position cluster at a random edge
+          const clusterDistance = Math.max(this.gameWidth, this.gameHeight) * 0.4;
+          const angle = Math.random() * Math.PI * 2;
+          const clusterX = Math.cos(angle) * clusterDistance;
+          const clusterY = Math.sin(angle) * clusterDistance;
+          
+          // Create random cluster
+          const clusterTypes = ['standard', 'binary', 'dense', 'sparse'];
+          const clusterSizes = ['small', 'medium'];
+          const clusterType = clusterTypes[Math.floor(Math.random() * clusterTypes.length)];
+          const clusterSize = clusterSizes[Math.floor(Math.random() * clusterSizes.length)];
+          
+          const cluster = new GalaxyCluster({
+            position: new THREE.Vector3(clusterX, clusterY, 0),
+            type: clusterType,
+            size: clusterSize,
+            scene: this.scene
+          });
+          
+          // Add objects to game
+          const clusterObjects = cluster.getAllObjects();
+          for (const obj of clusterObjects) {
+            this.celestialObjects.push(obj);
+            if (!obj.mesh.parent) {
+              this.scene.add(obj.mesh);
+            }
+          }
+          
+          // Store the cluster
+          if (!this.galaxyClusters) this.galaxyClusters = [];
+          this.galaxyClusters.push(cluster);
+        }
       }
     }
     

@@ -317,8 +317,8 @@ export class CelestialObject {
   
   createPlanetTexture() {
     const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 128;
+    canvas.width = 256;  // Increased resolution for better detail
+    canvas.height = 256;
     const ctx = canvas.getContext('2d');
     
     // Convert THREE.Color to CSS format
@@ -334,32 +334,47 @@ export class CelestialObject {
     const darkColor = `rgba(${Math.max(0, r-30)}, ${Math.max(0, g-30)}, ${Math.max(0, b-30)}, 0.7)`;
     const lightColor = `rgba(${Math.min(255, r+30)}, ${Math.min(255, g+30)}, ${Math.min(255, b+30)}, 0.7)`;
     
-    // Draw random "continents"
-    ctx.fillStyle = darkColor;
-    for (let i = 0; i < 10; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = 5 + Math.random() * 20;
-      
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // Use Perlin-like noise approach for seamless textures
+    const noiseScale = 0.1;
+    const width = canvas.width;
+    const height = canvas.height;
     
-    // Draw lighter areas
-    ctx.fillStyle = lightColor;
-    for (let i = 0; i < 15; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = 3 + Math.random() * 10;
-      
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
+    // Create seamless noise patterns by ensuring features wrap around edges
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        // Generate noise value that wraps around edges (using sin/cos for periodicity)
+        const nx = x / width;
+        const ny = y / height;
+        
+        // Create several octaves of noise for more natural look
+        const noise = 
+          Math.sin(nx * 6.28 * 2 + ny * 6.28 * 3) * 0.5 + 
+          Math.cos(nx * 6.28 * 5 - ny * 6.28 * 2) * 0.3 +
+          Math.sin(nx * 6.28 * 7 + ny * 6.28 * 7) * 0.2;
+        
+        const noiseValue = (noise + 1) / 2; // Normalize to 0-1
+        
+        // Apply noise as terrain features
+        if (noiseValue < 0.4) {
+          // Oceans/lowlands
+          ctx.fillStyle = darkColor;
+          ctx.fillRect(x, y, 1, 1);
+        } else if (noiseValue > 0.65) {
+          // Mountains/highlands
+          ctx.fillStyle = lightColor;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
     }
     
     // Create texture from canvas
-    return new THREE.CanvasTexture(canvas);
+    const texture = new THREE.CanvasTexture(canvas);
+    
+    // Set texture wrapping to ensure seamless edges
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    
+    return texture;
   }
   
   getRadius() {
@@ -452,235 +467,65 @@ export class CelestialObject {
   }
   
   update(deltaTime, blackHole, allObjects) {
+    // Skip update if the object is absorbed
     if (this.isAbsorbed) return;
     
-    // Planets are influenced by nearby stars (new feature)
-    if (this.type === OBJECT_TYPES.PLANET && allObjects) {
-      // Look for nearby stars that can influence this planet
-      for (const obj of allObjects) {
-        if (obj !== this && obj.type === OBJECT_TYPES.STAR && !obj.isAbsorbed) {
-          const distance = this.position.distanceTo(obj.position);
+    // Update orbital dynamics if this is a child object
+    if (this.parent && this.parent instanceof CelestialObject) {
+      this.updateOrbit(deltaTime);
+    } else {
+      // Otherwise update physics based on black hole gravity (if blackHole is provided)
+      if (blackHole) {
+        // Calculate distance to black hole
+        const distance = this.position.distanceTo(blackHole.position);
+        
+        // Only apply black hole gravity if within influence radius
+        // This ensures stars and planets maintain their orbits unless close to the black hole
+        const blackHoleInfluenceRadius = blackHole.getRadius() * 15; // Larger radius of influence
+        
+        if (distance < blackHoleInfluenceRadius) {
+          // Calculate gravitational force
+          const G = 0.25; // Gravitational constant (scaled for game)
           
-          // Only apply influence within a reasonable range (scale with star mass)
-          const influenceRadius = obj.mass * 8;
+          // Get vector from this object to black hole
+          const direction = new THREE.Vector3().subVectors(blackHole.position, this.position);
+          const safeDistance = Math.max(0.5, distance); // Prevent extreme forces
+          direction.normalize(); // Normalize to get direction
           
-          if (distance < influenceRadius) {
-            // Calculate gravitational pull from the star
-            // Direction to the star
-            const dirToStar = new THREE.Vector3().subVectors(obj.position, this.position).normalize();
-            
-            // Force is proportional to star's mass and inversely proportional to distance squared
-            // Using a smaller gravitational constant for better gameplay
-            const starGravityConstant = 0.015;
-            const forceMagnitude = starGravityConstant * obj.mass / (distance * distance);
-            
-            // Apply force as acceleration (F=ma, a=F/m)
-            const starAcceleration = dirToStar.multiplyScalar(forceMagnitude);
-            
-            // Add star's gravity to planet's velocity
-            this.velocity.add(starAcceleration.multiplyScalar(deltaTime));
-            
-            // Add slight perpendicular component for orbital motion if very close to the star
-            if (distance < influenceRadius * 0.5) {
-              const perpDirection = new THREE.Vector3(-dirToStar.y, dirToStar.x, 0).normalize();
-              this.velocity.add(perpDirection.multiplyScalar(forceMagnitude * 0.5 * deltaTime));
-            }
-          }
+          // Calculate force magnitude (F = G * (m1 * m2) / r^2)
+          // Scale force by distance - stronger pull when closer to black hole
+          const distanceFactor = Math.pow(1 - Math.min(1, distance / blackHoleInfluenceRadius), 2);
+          const forceMagnitude = G * (blackHole.mass * this.mass) / (safeDistance * safeDistance) * (0.2 + 0.8 * distanceFactor);
+          
+          // Apply force as acceleration (F = ma, so a = F/m)
+          const acceleration = direction.multiplyScalar(forceMagnitude / this.mass);
+          
+          // Update velocity
+          this.velocity.add(acceleration.multiplyScalar(deltaTime));
         }
       }
     }
     
-    if (blackHole) {
-      // Calculate gravitational force
-      const force = blackHole.getGravitationalPull(this.position, this.mass);
-      
-      // Apply force to velocity (F = ma, so a = F/m)
-      const acceleration = force.divideScalar(this.mass);
-      
-      // Check for x-y alignment with black hole (key gameplay mechanic)
-      // Calculate x,y distance (ignoring z)
-      const xyDistance = Math.sqrt(
-        Math.pow(blackHole.position.x - this.position.x, 2) +
-        Math.pow(blackHole.position.y - this.position.y, 2)
-      );
-      
-      // Using same alignment threshold as in BlackHole.js
-      const maxAlignmentDistance = 15;
-      
-      // If well-aligned, add additional acceleration toward black hole
-      if (xyDistance < maxAlignmentDistance) {
-        // Calculate alignment precision (1.0 = perfect alignment)
-        const alignmentPrecision = 1.0 - (xyDistance / maxAlignmentDistance);
-        
-        // Direct vector to black hole
-        const dirToBlackHole = new THREE.Vector3().subVectors(blackHole.position, this.position).normalize();
-        
-        // Stronger z-axis pull when aligned for better 3D effect
-        // The z component of velocity should increase more rapidly when aligned
-        const zAlignmentFactor = Math.pow(alignmentPrecision, 2) * 4.0; // Up to 4x stronger z-pull
-        
-        // Create alignment acceleration boost
-        const alignmentAccelBoost = dirToBlackHole.clone().multiplyScalar(
-          deltaTime * Math.pow(alignmentPrecision, 2) * 0.5 // Stronger direct pull based on alignment
-        );
-        alignmentAccelBoost.z *= zAlignmentFactor; // Enhance z-component even more
-        
-        // Add the alignment-based boost directly to velocity
-        this.velocity.add(alignmentAccelBoost);
-        
-        // When very well aligned, log the active effect for debugging
-        if (alignmentPrecision > 0.8) {
-          console.log(`${this.type} experiencing strong alignment pull: ${(alignmentPrecision * 100).toFixed(1)}%`);
-        }
-      }
-      
-      // For planets orbiting a star, scale down velocity changes
-      // This helps maintain orbits until closer to the black hole
-      if (this.parent && this.parent.type === OBJECT_TYPES.STAR) {
-        // Scale based on distance to black hole vs orbital radius
-        const distToBlackHole = this.position.distanceTo(blackHole.position);
-        const stabilityFactor = Math.min(1, (this.orbitalRadius * 2) / distToBlackHole);
-        
-        // Apply stability - farther from black hole = more stable orbits
-        this.velocity.multiplyScalar(0.7 + 0.3 * stabilityFactor);
-      }
-      
-      // Apply a minimum acceleration to ensure objects don't stall in space
-      const minAccelerationMagnitude = 0.05;
-      if (acceleration.lengthSq() < minAccelerationMagnitude * minAccelerationMagnitude) {
-        // If acceleration is too low, add a small component toward the black hole
-        const dirToBlackHole = new THREE.Vector3().subVectors(blackHole.position, this.position).normalize();
-        acceleration.add(dirToBlackHole.multiplyScalar(minAccelerationMagnitude));
-      }
-      
-      // Apply stronger acceleration to objects that are moving very slowly
-      if (this.velocity.lengthSq() < 0.1) {
-        const boostFactor = 1.5;
-        acceleration.multiplyScalar(boostFactor);
-      }
-      
-      // Add a slight perpendicular component for more interesting orbits
-      // This helps prevent objects from falling straight into the black hole
-      if (Math.random() < 0.01) { // Occasionally add orbital perturbation
-        const dirToBlackHole = new THREE.Vector3().subVectors(blackHole.position, this.position).normalize();
-        const perpDirection = new THREE.Vector3(-dirToBlackHole.y, dirToBlackHole.x, 0).normalize();
-        this.velocity.add(perpDirection.multiplyScalar(0.1));
-      }
-      
-      // Enhance z-axis movement toward/away from black hole for better 3D effect
-      // Add a small component of the gravitational pull in the z-direction
-      const distanceToBlackHole = this.position.distanceTo(blackHole.position);
-      const zFactor = 0.2 * (this.position.z - blackHole.position.z) / distanceToBlackHole;
-      
-      // Adjust velocity to enhance z-movement toward black hole
-      acceleration.z += zFactor;
-      
-      this.velocity.add(acceleration.multiplyScalar(deltaTime));
-    }
+    // Apply velocity to position
+    const velocityChange = this.velocity.clone().multiplyScalar(deltaTime);
+    this.position.add(velocityChange);
     
-    // Add a small damping factor to prevent velocities from growing too large
-    if (this.velocity.lengthSq() > 25) {
-      this.velocity.multiplyScalar(0.98);
-    }
-    
-    // Update position based on velocity
-    this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
-    
-    // Update mesh position
-    this.mesh.position.x = this.position.x;
-    this.mesh.position.y = this.position.y;
-    this.mesh.position.z = this.position.z; // Make sure to update z position
-    
-    // Add vertical oscillation based on type and time
-    // We'll make this much more subtle since we're now using actual z-position
-    if (!this.isAbsorbed) {
-      const time = performance.now() * 0.001;
-      let zOffset = 0;
-      
-      if (this.type === OBJECT_TYPES.STAR) {
-        // Very subtle oscillation for stars
-        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude * 0.5;
-      } else {
-        // Slightly more pronounced oscillation for planets and debris 
-        zOffset = Math.sin(time * this._oscSpeed + this._oscPhase) * this._oscAmplitude * 0.8;
-        
-        // Add some randomness to planet orbits in z-axis
-        if (Math.random() < 0.005) { // Occasional slight z-velocity changes
-          this._oscAmplitude = Math.max(0.1, Math.min(0.8, this._oscAmplitude + (Math.random() - 0.5) * 0.1));
-        }
-      }
-      
-      // Add the oscillation to the actual z-position
-      this.mesh.position.z += zOffset;
-    }
-    
-    // Update visual cues for depth
-    this.updateDepthVisuals();
-    
-    // Apply rotation
+    // Update mesh position to match physics position
     if (this.mesh) {
-      this.mesh.rotation.y += this.rotationSpeed;
+      this.mesh.position.copy(this.position);
       
-      // Update time uniforms for shader animations
-      if (this.mesh.material && this.mesh.material.uniforms && this.mesh.material.uniforms.time) {
-        this.mesh.material.uniforms.time.value += deltaTime;
-      }
-      
-      // For stars, update the shader time uniform in all components
-      if (this.type === OBJECT_TYPES.STAR) {
-        // Update all star planes' uniforms
-        if (this.starPlanes) {
-          this.starPlanes.forEach(plane => {
-            if (plane.material && plane.material.uniforms && plane.material.uniforms.time) {
-              plane.material.uniforms.time.value += deltaTime;
-            }
-          });
-        }
-        
-        // Update glow and corona mesh uniforms
-        if (this.glowMesh && this.glowMesh.material && this.glowMesh.material.uniforms) {
-          this.glowMesh.material.uniforms.time.value += deltaTime;
-        }
-        
-        if (this.coronaMesh && this.coronaMesh.material && this.coronaMesh.material.uniforms) {
-          this.coronaMesh.material.uniforms.time.value += deltaTime;
-        }
-        
-        // Update pulse clock
-        this.pulseClock += deltaTime * this.pulseSpeed;
-        
-        // Calculate pulse factor (0.8 to 1.2 range)
-        const pulseFactor = 1 + Math.sin(this.pulseClock) * this.pulseAmount;
-        
-        // Apply subtle pulsing to the planes to create dynamic effect
-        if (this.starPlanes) {
-          this.starPlanes.forEach(plane => {
-            if (!plane.userData.originalScale) {
-              plane.userData.originalScale = plane.scale.clone();
-            }
-            
-            // Different pulsing for each plane for more natural effect
-            const individualPulse = pulseFactor * (0.95 + 0.1 * Math.random());
-            plane.scale.copy(plane.userData.originalScale).multiplyScalar(individualPulse);
-          });
-        }
-        
-        // Subtly rotate the star planes for a more dynamic look
-        if (this.starPlanes && this.starPlanes.length > 0) {
-          // Different rotation speeds for different planes
-          this.starPlanes[0].rotation.z += deltaTime * 0.05;
-          if (this.starPlanes.length > 1) this.starPlanes[1].rotation.z -= deltaTime * 0.03;
-          if (this.starPlanes.length > 2) this.starPlanes[2].rotation.x += deltaTime * 0.04;
-          if (this.starPlanes.length > 3) this.starPlanes[3].rotation.x -= deltaTime * 0.02;
-        }
-      }
+      // Apply rotation to all object types - this was missing for planets and debris
+      this.mesh.rotation.y += this.rotationSpeed * deltaTime * 5; // Scale for better visual effect
     }
     
-    // Update any children objects if needed
-    if (this.children.length > 0) {
-      this.children.forEach(child => {
-        child.updateOrbit(deltaTime);
-      });
+    // If this is a star, apply small random motion
+    if (this.type === OBJECT_TYPES.STAR) {
+      this.updateStarEffects(deltaTime);
+    }
+    
+    // If this is a planet, check for influence from nearby stars
+    if (this.type === OBJECT_TYPES.PLANET && allObjects) {
+      this.handleStarInfluence(allObjects, deltaTime);
     }
   }
   
@@ -1095,5 +940,100 @@ export class CelestialObject {
       depthWrite: false,
       side: THREE.DoubleSide
     });
+  }
+  
+  // Add method to handle star influence
+  handleStarInfluence(allObjects, deltaTime) {
+    // Look for nearby stars that can influence this planet
+    for (const obj of allObjects) {
+      if (obj !== this && obj.type === OBJECT_TYPES.STAR && !obj.isAbsorbed) {
+        const distance = this.position.distanceTo(obj.position);
+        
+        // Only apply influence within a reasonable range (scale with star mass)
+        const influenceRadius = obj.mass * 8;
+        
+        if (distance < influenceRadius) {
+          // Calculate gravitational pull from the star
+          // Direction to the star
+          const dirToStar = new THREE.Vector3().subVectors(obj.position, this.position).normalize();
+          
+          // Force is proportional to star's mass and inversely proportional to distance squared
+          // Using a smaller gravitational constant for better gameplay
+          const starGravityConstant = 0.015;
+          const forceMagnitude = starGravityConstant * obj.mass / (distance * distance);
+          
+          // Apply force as acceleration (F=ma, a=F/m)
+          const starAcceleration = dirToStar.multiplyScalar(forceMagnitude);
+          
+          // Add star's gravity to planet's velocity
+          this.velocity.add(starAcceleration.multiplyScalar(deltaTime));
+          
+          // Add slight perpendicular component for orbital motion if very close to the star
+          if (distance < influenceRadius * 0.5) {
+            const perpDirection = new THREE.Vector3(-dirToStar.y, dirToStar.x, 0).normalize();
+            this.velocity.add(perpDirection.multiplyScalar(forceMagnitude * 0.5 * deltaTime));
+          }
+        }
+      }
+    }
+  }
+  
+  // Update star visual effects
+  updateStarEffects(deltaTime) {
+    // Apply rotation
+    if (this.mesh) {
+      this.mesh.rotation.y += this.rotationSpeed;
+      
+      // Update time uniforms for shader animations
+      if (this.mesh.material && this.mesh.material.uniforms && this.mesh.material.uniforms.time) {
+        this.mesh.material.uniforms.time.value += deltaTime;
+      }
+      
+      // Update all star planes' uniforms
+      if (this.starPlanes) {
+        this.starPlanes.forEach(plane => {
+          if (plane.material && plane.material.uniforms && plane.material.uniforms.time) {
+            plane.material.uniforms.time.value += deltaTime;
+          }
+        });
+      }
+      
+      // Update glow and corona mesh uniforms
+      if (this.glowMesh && this.glowMesh.material && this.glowMesh.material.uniforms) {
+        this.glowMesh.material.uniforms.time.value += deltaTime;
+      }
+      
+      if (this.coronaMesh && this.coronaMesh.material && this.coronaMesh.material.uniforms) {
+        this.coronaMesh.material.uniforms.time.value += deltaTime;
+      }
+      
+      // Update pulse clock
+      this.pulseClock += deltaTime * this.pulseSpeed;
+      
+      // Calculate pulse factor (0.8 to 1.2 range)
+      const pulseFactor = 1 + Math.sin(this.pulseClock) * this.pulseAmount;
+      
+      // Apply subtle pulsing to the planes to create dynamic effect
+      if (this.starPlanes) {
+        this.starPlanes.forEach(plane => {
+          if (!plane.userData.originalScale) {
+            plane.userData.originalScale = plane.scale.clone();
+          }
+          
+          // Different pulsing for each plane for more natural effect
+          const individualPulse = pulseFactor * (0.95 + 0.1 * Math.random());
+          plane.scale.copy(plane.userData.originalScale).multiplyScalar(individualPulse);
+        });
+      }
+      
+      // Subtly rotate the star planes for a more dynamic look
+      if (this.starPlanes && this.starPlanes.length > 0) {
+        // Different rotation speeds for different planes
+        this.starPlanes[0].rotation.z += deltaTime * 0.05;
+        if (this.starPlanes.length > 1) this.starPlanes[1].rotation.z -= deltaTime * 0.03;
+        if (this.starPlanes.length > 2) this.starPlanes[2].rotation.x += deltaTime * 0.04;
+        if (this.starPlanes.length > 3) this.starPlanes[3].rotation.x -= deltaTime * 0.02;
+      }
+    }
   }
 } 
