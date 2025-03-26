@@ -12,21 +12,8 @@ import { Interaction } from './libs/interaction.js';
 // At the top of the file, after imports
 console.log("Main.js loaded with ES6 modules");
 
-// =============================================
-// IMPORTANT: Make window.startGame globally accessible
-// This is needed because we're using ES modules which don't expose variables to window by default
-// =============================================
-window.startGame = function() {
-  console.log("Global startGame function called from window object");
-  if (window.game) {
-    window.game.startGame();
-  } else {
-    console.error("Game instance not found!");
-  }
-};
-
-// Make Game class globally available
-window.Game = class Game {
+// Define Game class first
+class Game {
   constructor() {
     console.log("Game constructor started");
     this.canvas = document.getElementById('game-canvas');
@@ -2005,6 +1992,24 @@ window.Game = class Game {
     }
   }
 }
+
+// Make Game class globally available
+window.Game = Game;
+
+// Create game instance
+window.game = new Game();
+
+// Make window.startGame globally accessible
+window.startGame = function() {
+  console.log("Global startGame function called from window object");
+  if (window.game) {
+    window.game.startGame();
+  } else {
+    console.log("Creating new game instance...");
+    window.game = new Game();
+    window.game.startGame();
+  }
+};
 
 // Initialize the game when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
