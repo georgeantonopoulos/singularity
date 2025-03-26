@@ -4,8 +4,8 @@ import { vertexShader, fragmentShader, accretionDiskVertexShader, accretionDiskF
 export class BlackHole {
   constructor(options = {}) {
     this.mass = options.initialMass || 1; // In solar mass units
-    this.position = new THREE.Vector3(0, 0, 0);
-    this.gravitationalConstant = 0.1; // Simplified for gameplay
+    this.position = new THREE.Vector3(0, 0, -120); // Position the black hole much deeper in 3D space
+    this.gravitationalConstant = 0.25; // Increased for stronger pull (was 0.1)
     this.absorbThreshold = 2.0; // Significantly increased for better gameplay
     this.eventHorizonVisuals = options.eventHorizonVisuals !== undefined ? options.eventHorizonVisuals : true;
     this.gravitationalLensingEffect = options.gravitationalLensingEffect || 0.5;
@@ -15,8 +15,10 @@ export class BlackHole {
   }
   
   createMesh() {
-    const geometry = new THREE.SphereGeometry(this.getRadius(), 32, 32);
+    const baseRadius = this.getRadius() * 3.5;
+    const geometry = new THREE.SphereGeometry(baseRadius, 32, 32);
     
+    // Update the material to ensure glow is at exact perimeter
     const material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
@@ -46,40 +48,56 @@ export class BlackHole {
         varying vec3 vNormal;
         
         void main() {
-          // Calculate normalized position from center
           vec3 nPos = normalize(vPosition);
           vec3 nNormal = normalize(vNormal);
           
-          // Calculate rim lighting effect
-          float rimLight = pow(1.0 - abs(dot(nNormal, vec3(0.0, 0.0, 1.0))), 2.0);
+          // Sharper rim lighting with exact perimeter glow
+          float rimLight = pow(1.0 - abs(dot(nNormal, vec3(0.0, 0.0, 1.0))), 8.0);
           
-          // Pure black color with rim effect
-          vec3 color = vec3(0.0, 0.0, 0.0);
+          vec3 color = vec3(0.0);
           
-          // Add subtle deep blue glow at the edges
-          color += vec3(0.0, 0.0, 0.1) * rimLight;
+          // Add blue glow exactly at perimeter
+          float edgeGlow = smoothstep(0.5, 1.0, rimLight);
+          color += vec3(0.0, 0.0, 0.3) * edgeGlow;
           
-          gl_FragColor = vec4(color, 1.0); // Completely opaque black hole
+          gl_FragColor = vec4(color, 1.0);
         }
       `,
       side: THREE.FrontSide,
-      transparent: false, // Make it completely opaque
-      depthWrite: true,   // Enable depth writing
-      depthTest: true     // Enable depth testing
+      transparent: false,
+      depthWrite: true,
+      depthTest: true
     });
     
     this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.position.copy(this.position);
-    this.mesh.renderOrder = -1; // Ensure it renders BEHIND other objects
     
-    // Add to parent object or scene
-    if (this.parent) {
-      this.parent.add(this.mesh);
-    } else if (this.scene) {
-      this.scene.add(this.mesh);
-    }
+    this.group = new THREE.Group();
+    this.group.position.copy(this.position);
     
-    return this.mesh;
+    this.mesh.position.set(0, 0, 0);
+    this.group.add(this.mesh);
+    
+    // Create event horizon with enhanced glow
+    const eventHorizonGeometry = new THREE.SphereGeometry(this.getRadius() * 1.3, 32, 32);
+    const eventHorizonMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        time: { value: 0 },
+        radius: { value: this.getRadius() * 1.3 }
+      },
+      vertexShader: vertexShader,
+      fragmentShader: fragmentShader,
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.BackSide
+    });
+    
+    this.eventHorizon = new THREE.Mesh(eventHorizonGeometry, eventHorizonMaterial);
+    this.eventHorizon.position.set(0, 0, 0);
+    this.group.add(this.eventHorizon);
+    
+    return this.group;
   }
   
   createAccretionDisk() {
@@ -109,41 +127,110 @@ export class BlackHole {
   
   getRadius() {
     // Black hole radius scales with mass (simplified for gameplay)
-    return Math.pow(this.mass, 1/3) * 0.6;
+    // Increase base size to ensure visibility
+    return Math.pow(this.mass, 1/3) * 3.0; // Much larger base size
   }
   
-  getGravitationalPull(objectPosition, objectMass) {
-    // Calculate gravitational force between black hole and object
+  getGravitationalPull(objectPosition, objectMass, celestialObject) {
     const direction = new THREE.Vector3().subVectors(this.position, objectPosition);
     const distance = direction.length();
     
-    // Prevent division by zero or very small numbers
-    if (distance < 0.1) {
-      return new THREE.Vector3(0, 0, 0);
+    if (distance < 0.1) return new THREE.Vector3(0, 0, 0);
+    
+    // Calculate XY distance (projected distance in XY plane)
+    const xyDistance = Math.sqrt(
+      Math.pow(this.position.x - objectPosition.x, 2) +
+      Math.pow(this.position.y - objectPosition.y, 2)
+    );
+    
+    // Calculate Z distance separately
+    const zDistance = Math.abs(this.position.z - objectPosition.z);
+    
+    // Get the black hole's visual perimeter radius (where the blue glow is)
+    const perimeterRadius = this.getRadius() * 3.5;
+    
+    // Calculate how close the object is to the perimeter in XY plane
+    const distanceFromPerimeter = Math.abs(xyDistance - perimeterRadius);
+    const perimeterAlignmentThreshold = perimeterRadius * 0.3; // 30% of perimeter radius
+    
+    // Calculate perimeter alignment factor (1.0 = perfect alignment, 0.0 = no alignment)
+    let perimeterAlignmentFactor = 0.0;
+
+    // Check if object has an active trajectory line
+    const hasTrajectory = celestialObject && celestialObject.trajectoryLine;
+    
+    if (hasTrajectory || distanceFromPerimeter < perimeterAlignmentThreshold) {
+      // Apply boost for either trajectory or close perimeter alignment
+      perimeterAlignmentFactor = Math.pow(
+        1.0 - (distanceFromPerimeter / perimeterAlignmentThreshold),
+        2.0
+      ) * 500.0; // Massive boost when aligned with perimeter or has trajectory
+      
+      // Extra boost when trajectory is active
+      if (hasTrajectory) {
+        perimeterAlignmentFactor *= 1.5; // 50% stronger when trajectory is shown
+      }
     }
     
-    // Calculate force magnitude using Newton's law of gravitation
-    // F = G * (m1 * m2) / r^2
-    // Modified to ensure distant objects still experience some pull
-    const invSquare = this.gravitationalConstant * this.mass * objectMass / (distance * distance);
-    const invLinear = this.gravitationalConstant * this.mass * objectMass / distance;
-    let t = (distance - 30) / 20;
-    t = Math.max(0, Math.min(1, t));
-    let forceMagnitude = (1 - t) * invSquare + t * invLinear;
-    const minForceMagnitude = 0.005 * objectMass;
-    if (forceMagnitude < minForceMagnitude) {
-      forceMagnitude = minForceMagnitude;
+    // Enhanced Z-axis detection radius - much larger than before
+    const maxAlignmentDistance = 15 * Math.pow(this.mass, 0.33);
+    const maxZAlignmentDistance = maxAlignmentDistance * 5; // Increased Z detection range
+    
+    // Calculate Z-axis alignment with higher base force
+    const zAlignmentFactor = zDistance < maxZAlignmentDistance ? 
+      Math.pow(1.0 - (zDistance / maxZAlignmentDistance), 2) * 8.0 : 1.0;
+    
+    // Combine alignment factors - perimeter alignment now dominates
+    let alignmentFactor = 1.0 + perimeterAlignmentFactor;
+    
+    // Calculate force magnitude with enhanced perimeter effect
+    const eventHorizonRadius = this.getRadius() * 5 * Math.pow(this.mass, 0.33);
+    let forceMagnitude;
+    
+    if (distance < eventHorizonRadius) {
+      const proximityFactor = 1.0 - Math.pow(distance / eventHorizonRadius, 2);
+      forceMagnitude = this.gravitationalConstant * this.mass * objectMass * 
+                       (2.0 + 8.0 * proximityFactor) / (distance * distance);
+    } else {
+      const invSquare = this.gravitationalConstant * this.mass * objectMass / (distance * distance);
+      const invLinear = this.gravitationalConstant * this.mass * objectMass / distance;
+      let t = (distance - 30) / 20;
+      t = Math.max(0, Math.min(1, t));
+      forceMagnitude = (1 - t) * invSquare + t * invLinear;
     }
     
-    // Apply force in the direction of the black hole (normalize first)
-    return direction.normalize().multiplyScalar(forceMagnitude);
+    // Apply combined alignment factors
+    forceMagnitude *= (alignmentFactor * Math.max(1.0, zAlignmentFactor));
+    
+    // Ensure minimum force
+    const minForceMagnitude = 0.01 * objectMass;
+    forceMagnitude = Math.max(forceMagnitude, minForceMagnitude);
+    
+    const normalizedDirection = direction.clone().normalize();
+    
+    // Enhanced Z-force calculation with perimeter consideration
+    let zForceFactor = Math.max(2.0, zAlignmentFactor * 4.0);
+    if (perimeterAlignmentFactor > 0) {
+      zForceFactor *= (1.0 + perimeterAlignmentFactor * 0.5); // Boost Z-force when near perimeter
+    }
+    
+    // Create final force vector with enhanced Z-component
+    const force = new THREE.Vector3(
+      normalizedDirection.x * forceMagnitude,
+      normalizedDirection.y * forceMagnitude,
+      normalizedDirection.z * forceMagnitude * zForceFactor
+    );
+    
+    return force;
   }
   
   increaseMass(amount) {
-    this.mass += amount;
+    // Increase mass gain for more noticeable growth
+    const growthFactor = 0.5; // Increased from 0.025
+    this.mass += amount * growthFactor;
     
     // Log the mass increase for debugging
-    console.log(`Black hole mass increased by ${amount.toFixed(2)} to ${this.mass.toFixed(2)}`);
+    console.log(`Black hole mass increased by ${(amount * growthFactor).toFixed(2)} to ${this.mass.toFixed(2)}`);
     
     // Update shader uniforms for all children
     if (this.mesh && this.mesh.material && this.mesh.material.uniforms) {
@@ -159,11 +246,21 @@ export class BlackHole {
     
     const currentRadius = this.getRadius();
     
-    // Update size
+    // Update size of both core and event horizon
     this.mesh.scale.set(1, 1, 1);
     
-    // Update shader uniforms
-    if (this.mesh.material.uniforms) {
+    // Update event horizon size if it exists
+    if (this.eventHorizon) {
+      this.eventHorizon.scale.set(1, 1, 1);
+      
+      // Update event horizon uniforms
+      if (this.eventHorizon.material && this.eventHorizon.material.uniforms) {
+        this.eventHorizon.material.uniforms.radius.value = currentRadius * 1.3;
+      }
+    }
+    
+    // Update shader uniforms for core
+    if (this.mesh.material && this.mesh.material.uniforms) {
       this.mesh.material.uniforms.radius.value = currentRadius;
       this.mesh.material.uniforms.intensity.value = Math.min(0.7 + (this.mass * 0.01), 1.0);
     }
@@ -171,8 +268,14 @@ export class BlackHole {
   
   // Update shader time uniforms for animations
   updateShaderTimeUniforms(deltaTime) {
+    // Update core mesh shader time
     if (this.mesh && this.mesh.material && this.mesh.material.uniforms) {
       this.mesh.material.uniforms.time.value += deltaTime;
+    }
+    
+    // Update event horizon shader time
+    if (this.eventHorizon && this.eventHorizon.material && this.eventHorizon.material.uniforms) {
+      this.eventHorizon.material.uniforms.time.value += deltaTime;
     }
   }
   
@@ -184,17 +287,52 @@ export class BlackHole {
   checkAbsorption(celestialObject) {
     if (celestialObject.isAbsorbed) return false;
     
+    // Calculate 3D distance between black hole and object
     const distance = this.position.distanceTo(celestialObject.position);
-    // Increased multiplier from 2 to 4 to ensure the absorption radius scales with black hole growth
-    const absorptionRadius = this.getRadius() * 4 + celestialObject.getRadius();
     
-    if (distance <= absorptionRadius) {
-      console.log(`Object absorption started! Type: ${celestialObject.type}, Mass: ${celestialObject.mass.toFixed(2)}, Distance: ${distance.toFixed(2)}`);
-      
-      // Start absorption animation instead of immediately absorbing
-      this.animateObjectAbsorption(celestialObject, distance);
-      
-      return true;
+    // Calculate projected 2D distance (x-y plane) for visual absorption
+    const xyDistance = Math.sqrt(
+      Math.pow(this.position.x - celestialObject.position.x, 2) +
+      Math.pow(this.position.y - celestialObject.position.y, 2)
+    );
+    
+    // Calculate z-distance (depth) between object and black hole
+    const zDistance = Math.abs(this.position.z - celestialObject.position.z);
+    
+    // Scale absorption radius with black hole mass
+    // Larger black holes can absorb objects from further away
+    const massScaleFactor = Math.pow(this.mass, 0.4); // Higher exponent = more aggressive growth
+    const absorptionRadius = this.getRadius() * 6 * massScaleFactor + celestialObject.getRadius();
+    
+    // Calculate z-factor to adjust absorption radius based on z-position
+    // Objects further away in z-space should be harder to absorb
+    const zFactor = Math.max(0.8, 1.0 - (zDistance / 50));
+    
+    // For objects behind the black hole (negative z), use a larger absorption radius
+    // to compensate for perspective foreshortening
+    let adjustedAbsorptionRadius = absorptionRadius * zFactor;
+    if (celestialObject.position.z < this.position.z) {
+      // Object is behind the black hole, increase absorption radius proportionally
+      // but with a more gradual falloff based on z-distance
+      adjustedAbsorptionRadius *= (1 + Math.min(zDistance/40, 0.8));
+    }
+    
+    // Scale max Z absorption range based on black hole size for better scaling
+    const maxZAbsorption = this.getRadius() * 8 * massScaleFactor; // Scales with black hole size
+    
+    // Check if object should be absorbed based on either x-y distance or full 3D distance
+    // Use a weighted approach that considers both xy-distance and z-distance
+    if ((xyDistance <= adjustedAbsorptionRadius && zDistance <= maxZAbsorption * 1.2) || 
+        distance <= absorptionRadius * 1.3) {
+      // For objects not aligned in xy-plane, use more relaxed z-distance check
+      if (zDistance <= maxZAbsorption) {
+        console.log(`Object absorption started! Type: ${celestialObject.type}, Mass: ${celestialObject.mass.toFixed(2)}, Distance: ${distance.toFixed(2)}, Z-distance: ${zDistance.toFixed(2)}`);
+        
+        // Start absorption animation instead of immediately absorbing
+        this.animateObjectAbsorption(celestialObject, distance);
+        
+        return true;
+      }
     }
     
     return false;
@@ -204,155 +342,68 @@ export class BlackHole {
     // Don't re-absorb objects
     if (object.isBeingAbsorbed || object.isAbsorbed) return;
     
-    // Mark object as being absorbed so we don't trigger this again
+    // Mark object as being absorbed
     object.isBeingAbsorbed = true;
     
-    // Store initial properties for animation
-    const initialScale = object.mesh.scale.clone();
-    const initialPosition = object.position.clone();
-    const initialBlackHolePosition = this.position.clone();
-    const initialBlackHoleRadius = this.getRadius();
+    // Set start position at current position
+    const startPos = object.position.clone();
     
-    // Duration of animation in seconds - make it longer for better visibility
-    const duration = 1.8; 
-    const startTime = performance.now() / 1000;
+    // Set a fixed duration
+    const duration = 1.0;
+    const startTime = Date.now();
     
-    // Determine the "top" of the black hole relative to camera view
-    // In a top-down view, the up direction is considered the normal facing the camera
-    // We'll use the z-axis as the "up" direction in our 3D space
-    const upDirection = new THREE.Vector3(0, 0, 1);
-    
-    // Create animation function
-    const animateAbsorption = () => {
-      // Calculate elapsed time
-      const currentTime = performance.now() / 1000;
-      const elapsed = currentTime - startTime;
+    // The animation function
+    const animate = () => {
+      // Calculate progress (0 to 1)
+      const now = Date.now();
+      const elapsed = (now - startTime) / 1000;
       const progress = Math.min(elapsed / duration, 1.0);
       
-      // Use easing function for smoother spiral
-      const easeProgress = 1 - Math.pow(1 - progress, 2); // Quadratic ease out
+      // Current black hole position
+      const bhPos = this.position;
       
-      // Get current black hole position and size - these may have changed since animation started
-      const currentBlackHolePosition = this.position.clone();
-      const currentBlackHoleRadius = this.getRadius();
+      // Linear movement directly toward black hole
+      const x = startPos.x + (bhPos.x - startPos.x) * progress;
+      const y = startPos.y + (bhPos.y - startPos.y) * progress;
+      const z = startPos.z + (bhPos.z - startPos.z) * progress;
       
-      // Calculate offset from initial black hole position to current position
-      const blackHoleOffset = new THREE.Vector3().subVectors(
-        currentBlackHolePosition, 
-        initialBlackHolePosition
-      );
+      // Update position
+      object.position.set(x, y, z);
+      object.mesh.position.set(x, y, z);
       
-      // Calculate scaling factor between initial and current black hole size
-      const radiusRatio = currentBlackHoleRadius / initialBlackHoleRadius;
+      // Scale down linearly
+      const scale = 1.0 - progress;
+      object.mesh.scale.set(scale, scale, scale);
       
-      // Calculate spiral parameters
-      const angle = progress * Math.PI * 10; // 10 full rotations during the animation
-      const spiralTightness = 0.9;
-      
-      // Move toward current black hole position with spiral
-      const distanceFactor = Math.pow(1 - easeProgress, 1.2); // Slower approach
-      
-      // Adjust the target position to account for black hole movement
-      const targetPosition = currentBlackHolePosition.clone();
-      
-      // Adjust starting position to account for black hole movement
-      const adjustedInitialPosition = new THREE.Vector3().addVectors(
-        initialPosition,
-        blackHoleOffset.clone().multiplyScalar(0.5) // 50% follow black hole movement
-      );
-      
-      // Calculate position in the spiral plane (x-y)
-      const spiralX = adjustedInitialPosition.x + (targetPosition.x - adjustedInitialPosition.x) * easeProgress;
-      const spiralY = adjustedInitialPosition.y + (targetPosition.y - adjustedInitialPosition.y) * easeProgress;
-      
-      // Add spiral effect in the x-y plane
-      const scaledDistance = distance * radiusRatio;
-      const spiralRadius = scaledDistance * distanceFactor * spiralTightness;
-      const finalX = spiralX + Math.cos(angle) * spiralRadius * (1 - easeProgress * 0.7);
-      const finalY = spiralY + Math.sin(angle) * spiralRadius * (1 - easeProgress * 0.7);
-      
-      // Calculate z-position - move object up slightly above the black hole during absorption
-      // This creates the effect of spiraling toward the "top" of the black hole
-      const initialZ = adjustedInitialPosition.z || 0;
-      const targetZ = targetPosition.z || 0;
-      
-      // Create a bell curve that peaks at the middle of the animation and returns near the end
-      const zOffset = Math.sin(progress * Math.PI) * currentBlackHoleRadius * 0.5;
-      const finalZ = initialZ + (targetZ - initialZ) * easeProgress + zOffset;
-      
-      // Update object position
-      object.position.set(finalX, finalY, finalZ);
-      object.mesh.position.copy(object.position);
-      
-      // Make objects stretch MORE as they approach the black hole center
-      const stretchDirection = new THREE.Vector3()
-        .subVectors(targetPosition, object.position)
-        .normalize();
-      
-      // Add an upward component to the stretch direction for the "top" absorption effect
-      stretchDirection.z += upDirection.z * (1 - distanceFactor) * 0.5;
-      stretchDirection.normalize();
-      
-      // Calculate distance-based scaling to ensure planets stay visible
-      const distToCenter = object.position.distanceTo(targetPosition);
-      const scaledBlackHoleRadius = currentBlackHoleRadius;
-
-      // Only start shrinking when closer to the center, scaled by black hole size
-      let shrinkFactor = 1.0;
-      if (distToCenter < scaledBlackHoleRadius * 2.5) {
-        shrinkFactor = distToCenter / (scaledBlackHoleRadius * 2.5);
-        shrinkFactor = Math.max(0.4, shrinkFactor); // Don't shrink below 40%
-      }
-      
-      // Keep objects larger than before
-      const newScale = initialScale.clone().multiplyScalar(shrinkFactor);
-      object.mesh.scale.copy(newScale);
-      
-      // More dramatic stretching effect toward black hole center and upward
-      const stretchFactor = Math.min(5, 1 + (1 - shrinkFactor) * 6 * radiusRatio);
-      object.mesh.scale.x *= (1 + stretchDirection.x * stretchFactor);
-      object.mesh.scale.y *= (1 + stretchDirection.y * stretchFactor);
-      object.mesh.scale.z *= (1 + stretchDirection.z * stretchFactor * 1.5); // Extra stretching in the z direction
-      
-      // Keep opacity higher until very close to center
-      let opacity = 1.0;
-      if (distToCenter < scaledBlackHoleRadius) {
-        // Scale opacity threshold by black hole size
-        opacity = distToCenter / scaledBlackHoleRadius;
-      }
-      
-      // Fade out as it's absorbed, but more gradually
-      if (object.mesh.material) {
-        if (object.mesh.material.opacity !== undefined) {
-          object.mesh.material.opacity = opacity;
-          // Ensure transparent is enabled if we're modifying opacity
-          object.mesh.material.transparent = true;
-        } else if (object.mesh.material.uniforms && object.mesh.material.uniforms.opacity) {
-          object.mesh.material.uniforms.opacity.value = opacity;
-          // Ensure transparent is enabled
-          object.mesh.material.transparent = true;
-        }
-      }
-      
-      // Check if animation is complete
-      if (progress < 1.0 && !object.isAbsorbed) {
-        requestAnimationFrame(animateAbsorption);
-      } else {
-        // Mark as fully absorbed
+      // Finish at progress 1.0
+      if (progress >= 1.0) {
+        // Mark as absorbed
         object.isAbsorbed = true;
         
-        // Increase mass based on absorbed object
-        this.increaseMass(object.mass * 0.025);
+        // Set position to black hole
+        object.position.copy(bhPos);
+        object.mesh.position.copy(bhPos);
+        object.mesh.scale.set(0, 0, 0);
         
-        // Call the callback if it exists
+        // Increase black hole mass
+        let massFactor = 0.025;
+        if (object.type === 'star') massFactor = 0.03;
+        else if (object.type === 'debris') massFactor = 0.02;
+        
+        this.increaseMass(object.mass * massFactor);
+        
+        // Call callback
         if (this.onObjectAbsorbed) {
           this.onObjectAbsorbed(object);
         }
+      } else {
+        // Continue animation
+        requestAnimationFrame(animate);
       }
     };
     
     // Start animation
-    animateAbsorption();
+    animate();
   }
   
   update(deltaTime, celestialObjects) {
@@ -364,15 +415,27 @@ export class BlackHole {
     
     // Check for collisions and absorptions
     if (celestialObjects) {
-      for (const object of celestialObjects) {
-        if (!object.isAbsorbed && !object.isBeingAbsorbed) {
-          this.checkAbsorption(object);
+      // Scale absorption check frequency with mass - larger black holes check more frequently
+      const checkFrequency = Math.max(1, Math.floor(10 / Math.pow(this.mass, 0.5)));
+      
+      // Only check a subset of objects each frame to improve performance
+      // As the black hole grows, it will check more objects per frame
+      for (let i = 0; i < celestialObjects.length; i++) {
+        const object = celestialObjects[i];
+        // Check objects based on a rotating index and black hole mass
+        if (i % checkFrequency === this.frameCount % checkFrequency) {
+          if (!object.isAbsorbed && !object.isBeingAbsorbed) {
+            this.checkAbsorption(object);
+          }
         }
       }
     }
+    
+    // Update frame counter
+    this.frameCount = (this.frameCount || 0) + 1;
   }
   
-  // Get screen position for lens effect
+  // Enhanced getScreenPosition method that's more robust for lens effect
   getScreenPosition(camera) {
     // Use the provided camera or the stored camera reference
     const cam = camera || this.camera;
@@ -385,21 +448,32 @@ export class BlackHole {
     // Project to normalized device coordinates
     vector.project(cam);
     
+    // Handle out-of-frustum case to prevent errors
+    if (Math.abs(vector.x) > 1 || Math.abs(vector.y) > 1 || Math.abs(vector.z) > 1) {
+      // Black hole is outside camera frustum, provide safe fallback
+      return { x: window.innerWidth/2, y: window.innerHeight/2 };
+    }
+    
     // Convert from NDC (-1 to 1) to screen coordinates
     const screenPosition = {
       x: (vector.x + 1) * window.innerWidth / 2,
       y: (-vector.y + 1) * window.innerHeight / 2  // Y is flipped in WebGL
     };
     
+    // Add slight debug - can be removed in production
+    // console.log("Black hole 3D->2D: pos:", this.position, "screen:", screenPosition);
+    
     return screenPosition;
   }
   
-  // Get properties needed for post-processing lens effect
+  // Enhanced properties for lens effect with improved camera distance scaling
   getLensEffectProperties() {
     return {
-      position: this.mesh.position.clone(), // 3D world position
-      radius: this.getRadius(),                  // Current radius in world units
-      mass: this.mass                       // Current mass value
+      position: this.position.clone(),      // 3D world position
+      radius: this.getRadius(),             // Current radius in world units
+      mass: this.mass,                      // Current mass value
+      // Add camera distance scale factor for better lens effect
+      cameraDistance: this.camera ? this.camera.position.distanceTo(this.position) : 90
     };
   }
 } 

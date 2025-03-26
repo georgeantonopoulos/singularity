@@ -1,0 +1,30 @@
+Copyright (c) 2025 George Antonopoulos - Christopher's Singularity & Gravitational Lensing Simulation
+
+All rights reserved.
+
+This software and associated documentation files (the "Software") are protected by copyright law. 
+The following restrictions apply:
+
+1. No part of this Software may be copied, modified, merged, published, distributed, 
+   sublicensed, and/or sold without explicit written permission from George Antonopoulos.
+
+2. The gravitational lensing effect implementation and black hole visualization techniques 
+   are proprietary and may not be reproduced or adapted in any form without explicit 
+   written permission.
+
+3. Viewing and running the Software for personal, non-commercial use is permitted, 
+   provided that:
+   a) No modifications are made to the Software
+   b) All copyright notices and this permission notice are preserved
+   c) Credit is given to George Antonopoulos for any public demonstrations or discussions
+
+4. Commercial use, modification, or redistribution of this Software or any of its 
+   components requires explicit written permission from the copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE. 

@@ -7,6 +7,7 @@ import { createStarfield } from './utils/starfield.js';
 import { lensPostProcessingVertexShader, lensPostProcessingFragmentShader } from './shaders/blackHoleShaders.js';
 import { BlackHoleLensEffect } from './libs/BlackHoleLensEffect.js';
 import { GalaxyCluster } from './entities/GalaxyCluster.js';
+import { Interaction } from './libs/interaction.js';
 
 // At the top of the file, after imports
 console.log("Main.js loaded with ES6 modules");
@@ -62,7 +63,7 @@ window.Game = class Game {
     this.gameWidth = 100;
     this.gameHeight = 60;
     
-    // Camera animation properties
+    // Camera animation properties - keep these but they won't be used
     this.cameraAnimationActive = false;
     this.cameraTargetPosition = new THREE.Vector3(0, 0, 0);
     this.cameraOriginalPosition = new THREE.Vector3(0, 0, 0);
@@ -79,21 +80,40 @@ window.Game = class Game {
   }
 
   setupEventListeners() {
-    console.log("Setting up event listeners");
+    // UI elements
+    this.startButton = document.getElementById('start-button');
+    this.restartButton = document.getElementById('restart-button');
+    this.gameOverContainer = document.getElementById('game-over');
     
-    if (!this.startButton) {
-      console.error("Start button not found in the DOM!");
-      this.startButton = document.getElementById('start-button');
-      console.log("Retry getting start button:", this.startButton);
+    // Create new Interaction instance if it doesn't exist
+    if (!this.interaction) {
+      this.interaction = new Interaction(this.canvas, {
+        panEnabled: true,
+        zoomEnabled: true,
+        panSpeed: 2.0,
+        zoomSpeed: 8.0
+      });
+      
+      // Set camera for the interaction system
+      this.interaction.setCamera(this.camera);
+      
+      // Register click callback to handle black hole movement
+      this.interaction.on('click', (mouse) => {
+        if (!this.isRunning) return;
+        this.onCanvasClick({ 
+          clientX: mouse.x + this.canvas.getBoundingClientRect().left,
+          clientY: mouse.y + this.canvas.getBoundingClientRect().top
+        });
+      });
     }
     
-    // Direct click handler function for debugging
+    // Add start button listener with direct reference to function
     const handleStartClick = () => {
       console.log("Start button clicked!");
       this.startGame();
     };
     
-    // Make sure to remove any existing listeners first
+    // Remove any existing listener first
     this.startButton.removeEventListener('click', handleStartClick);
     
     // Add new listener with direct reference to function
@@ -115,27 +135,33 @@ window.Game = class Game {
     // Handle resize
     window.addEventListener('resize', () => this.onWindowResize());
     
-    // Changed: Use click instead of mousemove for black hole movement
-    this.canvas.addEventListener('click', (e) => this.onCanvasClick(e));
-    
-    // Add mousemove just to track position for visual feedback
-    this.canvas.addEventListener('mousemove', (e) => {
-      // Update mouse position but don't move black hole
-      this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-      this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    });
+    // IMPORTANT: Removed direct canvas click event listener
+    // Now using the Interaction class for all canvas input
   }
   
   onCanvasClick(event) {
     if (!this.isRunning) return;
     
+    // IMPORTANT: Ignore middle mouse and right mouse button clicks for black hole movement
+    // This prevents conflicts with camera panning
+    if (event.button === 1 || event.button === 2) {
+      return;
+    }
+    
     // Calculate mouse position in normalized device coordinates (-1 to +1)
     const x = (event.clientX / window.innerWidth) * 2 - 1;
     const y = -(event.clientY / window.innerHeight) * 2 + 1;
     
-    // Convert to world coordinates
-    const worldPos = new THREE.Vector3(x, y, 0);
-    worldPos.unproject(this.camera);
+    // Create a ray from the camera position through the mouse position
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(x, y), this.camera);
+    
+    // Create a plane at z=0 (game plane)
+    const gamePlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    
+    // Find where the ray intersects the game plane
+    const worldPos = new THREE.Vector3();
+    raycaster.ray.intersectPlane(gamePlane, worldPos);
     
     // Limit the target position to the game area bounds
     const targetX = Math.max(-this.gameWidth/2, Math.min(this.gameWidth/2, worldPos.x));
@@ -152,145 +178,210 @@ window.Game = class Game {
     
     // Smoothly move black hole towards target position (lerp)
     if (this.targetPosition) {
-      // Calculate distance to target
-      const distance = this.blackHole.position.distanceTo(this.targetPosition);
+      // Calculate distance to target (only x and y components)
+      const xyDistance = Math.sqrt(
+        Math.pow(this.blackHole.position.x - this.targetPosition.x, 2) +
+        Math.pow(this.blackHole.position.y - this.targetPosition.y, 2)
+      );
       
       // Only update if we're not already very close
-      if (distance > 0.1) {
+      if (xyDistance > 0.1) {
+        // Create a temporary target that preserves the z position
+        const tempTarget = new THREE.Vector3(
+          this.targetPosition.x,
+          this.targetPosition.y,
+          this.blackHole.position.z  // Keep original z position
+        );
+        
         // Use a smaller lerp factor for slower movement
-        const slowLerpFactor = this.lerpFactor * 0.3; // Half the original speed
-        this.blackHole.position.lerp(this.targetPosition, slowLerpFactor);
-        this.blackHole.mesh.position.copy(this.blackHole.position);
+        const slowLerpFactor = this.lerpFactor * 0.3; // Slower speed
+        this.blackHole.position.lerp(tempTarget, slowLerpFactor);
+        
+        // Update the visual representation (group or mesh)
+        if (this.blackHole.group) {
+          this.blackHole.group.position.copy(this.blackHole.position);
+        } else if (this.blackHole.mesh) {
+          this.blackHole.mesh.position.copy(this.blackHole.position);
+        }
       }
     }
     
-    // Check if black hole has grown too large and needs camera adjustment
+    // Check for alignment with celestial objects and create visual cue
+    this.checkAlignmentWithObjects();
+    
+    // Empty call to checkBlackHoleSizeForCameraAdjustment (disabled)
+    // We keep the call but the function does nothing
     this.checkBlackHoleSizeForCameraAdjustment();
   }
   
-  // New method to check black hole size and trigger camera animation if needed
+  // Disabled camera adjustment methods - keep as empty stubs to maintain references
+  // Empty stub function for checkBlackHoleSizeForCameraAdjustment
   checkBlackHoleSizeForCameraAdjustment() {
-    if (!this.blackHole || !this.camera) return;
+    // This function is intentionally disabled
+    return;
+  }
+  
+  // Empty stub function for resetCameraPosition
+  resetCameraPosition() {
+    // This function is intentionally disabled
+    return;
+  }
+  
+  // Empty stub function for startCameraAnimation
+  startCameraAnimation() {
+    // This function is intentionally disabled
+    return;
+  }
+  
+  // New method to check for alignment with celestial objects
+  checkAlignmentWithObjects() {
+    if (!this.blackHole || !this.celestialObjects || this.celestialObjects.length === 0) return;
     
-    // Get the current black hole radius
-    const blackHoleRadius = this.blackHole.getRadius();
+    // Remove existing alignment indicator if present
+    if (this.alignmentIndicator) {
+      this.scene.remove(this.alignmentIndicator);
+      this.alignmentIndicator = null;
+    }
     
-    // Compare to half the screen size (use the smaller dimension)
-    const screenThreshold = Math.min(this.gameWidth, this.gameHeight) / 2;
+    // Calculate a much wider radius for alignment detection
+    // Using a significant portion of the game area width for wider detection
+    const alignmentRadius = this.gameWidth * 0.15; // Much wider alignment radius - 15% of game width
     
-    if (blackHoleRadius > screenThreshold * 0.5) {
-      // Black hole is getting too large
-      if (!this.cameraSizeThresholdTriggered && !this.cameraAnimationActive) {
-        // Start the delay timer
-        this.cameraSizeThresholdTriggered = true;
-        this.cameraSizeThresholdTimestamp = performance.now() / 1000;
-        console.log("Black hole size threshold reached, waiting for delay before camera animation");
-      } else if (!this.cameraAnimationActive) {
-        // Check if delay has passed
-        const currentTime = performance.now() / 1000;
-        const elapsedDelay = currentTime - this.cameraSizeThresholdTimestamp;
+    // Find nearby objects that might be aligned with the black hole
+    let closestAlignedObject = null;
+    let closestAlignmentDistance = Infinity;
+    let strongestAlignmentFactor = 0;
+    
+    for (const object of this.celestialObjects) {
+      if (object.isAbsorbed || object.isBeingAbsorbed) continue;
+      
+      // Calculate x,y distance (ignoring z)
+      const xyDistance = Math.sqrt(
+        Math.pow(this.blackHole.position.x - object.position.x, 2) +
+        Math.pow(this.blackHole.position.y - object.position.y, 2)
+      );
+      
+      // If within alignment threshold - now using much wider radius
+      if (xyDistance < alignmentRadius) {
+        // Calculate alignment precision (1.0 = perfect alignment)
+        const alignmentPrecision = 1.0 - (xyDistance / alignmentRadius);
+        const alignmentFactor = 1.0 + Math.pow(alignmentPrecision, 2) * 3.0;
         
-        if (elapsedDelay >= this.cameraSizeThresholdDelay) {
-          // Start camera animation
-          this.startCameraAnimation();
+        // Lower threshold to consider alignment (from 1.2 to 1.1)
+        if (xyDistance < closestAlignmentDistance && alignmentFactor > 1.1) {
+          closestAlignmentDistance = xyDistance;
+          closestAlignedObject = object;
+          strongestAlignmentFactor = alignmentFactor;
         }
       }
-    } else if (blackHoleRadius < screenThreshold * 0.25 && this.camera.position.z > 90) {
-      // Black hole has become small enough and camera is still zoomed out
-      // Reset camera position (with animation)
-      if (!this.cameraAnimationActive) {
-        this.resetCameraPosition();
-      }
+    }
+    
+    // If we found an aligned object, create a visual indicator
+    if (closestAlignedObject && strongestAlignmentFactor > 1.1) {
+      // Calculate intensity based on alignment strength (0.0 to 1.0)
+      const intensity = Math.min((strongestAlignmentFactor - 1.0) / 3.0, 1.0);
       
-      // Reset threshold flag
-      this.cameraSizeThresholdTriggered = false;
-    } else {
-      // Reset threshold flag when size is normal
-      this.cameraSizeThresholdTriggered = false;
+      // Create alignment line connecting black hole to object
+      const lineGeometry = new THREE.BufferGeometry();
+      const start = this.blackHole.position.clone();
+      const end = closestAlignedObject.position.clone();
+      
+      // Create points array for the line
+      const points = [start, end];
+      lineGeometry.setFromPoints(points);
+      
+      // Create a shader material with animation
+      const lineMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          color: { value: new THREE.Color(0x6699ff) }, // Blue alignment beam
+          intensity: { value: intensity * 0.7 },        // Scale down intensity a bit
+          dashSize: { value: 0.5 },
+          gapSize: { value: 0.5 },
+          time: { value: 0 }
+        },
+        vertexShader: `
+          uniform float time;
+          varying vec3 vPosition;
+          
+          void main() {
+            vPosition = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 color;
+          uniform float intensity;
+          uniform float dashSize;
+          uniform float gapSize;
+          uniform float time;
+          varying vec3 vPosition;
+          
+          void main() {
+            // Calculate distance along the line
+            float dist = length(vPosition);
+            
+            // Create animated dashed line effect
+            float pattern = fract((dist * 0.5 - time * 2.0) / (dashSize + gapSize));
+            float dash = step(pattern, dashSize / (dashSize + gapSize));
+            
+            // Pulse effect
+            float pulse = 0.8 + 0.2 * sin(time * 5.0);
+            
+            // Edge falloff for a smoother look
+            float edge = smoothstep(0.0, 0.1, abs(0.5 - pattern)) * 0.8 + 0.2;
+            
+            // Final color with all effects
+            vec3 finalColor = color * intensity * dash * edge * pulse;
+            float alpha = intensity * dash * edge * pulse * 0.8;
+            
+            gl_FragColor = vec4(finalColor, alpha);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      
+      // Create the line
+      this.alignmentIndicator = new THREE.Line(lineGeometry, lineMaterial);
+      this.scene.add(this.alignmentIndicator);
+      
+      // Store the start time for animation
+      this.alignmentIndicator.userData.startTime = performance.now() / 1000;
+      this.alignmentIndicator.userData.alignedObject = closestAlignedObject;
+      
+      // Add this to the animation update loop
+      if (!this.updateAlignmentIndicator) {
+        this.updateAlignmentIndicator = (deltaTime) => {
+          if (this.alignmentIndicator && this.alignmentIndicator.material) {
+            // Calculate elapsed time since creation
+            const currentTime = performance.now() / 1000;
+            const elapsedTime = currentTime - this.alignmentIndicator.userData.startTime;
+            
+            // Update shader time uniform
+            this.alignmentIndicator.material.uniforms.time.value = elapsedTime;
+            
+            // Update line positions if objects moved
+            const alignedObject = this.alignmentIndicator.userData.alignedObject;
+            if (this.blackHole && alignedObject && !alignedObject.isAbsorbed) {
+              const points = [
+                this.blackHole.position.clone(),
+                alignedObject.position.clone()
+              ];
+              this.alignmentIndicator.geometry.dispose();
+              this.alignmentIndicator.geometry = new THREE.BufferGeometry().setFromPoints(points);
+            }
+          }
+        };
+      }
     }
   }
   
-  // New method to reset camera position
-  resetCameraPosition() {
-    if (this.cameraAnimationActive) return;
-    
-    console.log("Resetting camera position");
-    
-    // Store current camera position
-    this.cameraOriginalPosition.copy(this.camera.position);
-    
-    // Target the initial camera position
-    this.cameraTargetPosition.set(0, 0, 80);
-    
-    // Set animation parameters
-    this.cameraAnimationActive = true;
-    this.cameraAnimationStartTime = performance.now() / 1000;
-    this.cameraAnimationDuration = 3.0; // Slightly longer duration for reset
-  }
-  
-  // New method to start camera animation
-  startCameraAnimation() {
-    if (this.cameraAnimationActive) return;
-    
-    console.log("Starting camera animation to zoom out");
-    
-    // Store current camera position
-    this.cameraOriginalPosition.copy(this.camera.position);
-    
-    // Calculate target position (move camera up/back to see more)
-    // Make the camera movement proportional to the black hole size
-    const blackHoleRadius = this.blackHole.getRadius();
-    const screenThreshold = Math.min(this.gameWidth, this.gameHeight) / 2;
-    const sizeFactor = blackHoleRadius / screenThreshold;
-    
-    // Calculate how much to move the camera based on black hole size
-    // Larger black holes need more camera movement
-    const zOffset = this.gameHeight * 0.5 * Math.max(1, sizeFactor);
-    
-    this.cameraTargetPosition.set(
-      this.camera.position.x,
-      this.camera.position.y,
-      this.camera.position.z + zOffset
-    );
-    
-    console.log(`Camera moving from z=${this.camera.position.z} to z=${this.cameraTargetPosition.z}`);
-    
-    // Set animation parameters
-    this.cameraAnimationActive = true;
-    this.cameraAnimationStartTime = performance.now() / 1000;
-    
-    // Reset threshold trigger
-    this.cameraSizeThresholdTriggered = false;
-  }
-  
-  // New method to update camera animation
+  // Empty placeholder function to avoid reference errors
   updateCameraAnimation(deltaTime) {
-    if (!this.cameraAnimationActive) return;
-    
-    const currentTime = performance.now() / 1000;
-    const elapsedTime = currentTime - this.cameraAnimationStartTime;
-    
-    if (elapsedTime >= this.cameraAnimationDuration) {
-      // Animation complete
-      this.camera.position.copy(this.cameraTargetPosition);
-      this.cameraAnimationActive = false;
-      console.log("Camera animation completed");
-      return;
-    }
-    
-    // Calculate progress (0 to 1) with easing
-    const progress = elapsedTime / this.cameraAnimationDuration;
-    const easedProgress = this.easeOutQuad(progress);
-    
-    // Interpolate camera position
-    this.camera.position.lerpVectors(
-      this.cameraOriginalPosition,
-      this.cameraTargetPosition,
-      easedProgress
-    );
-    
-    // Update orthographic camera projection
-    this.updateOrthographicCamera();
+    // This function is intentionally left empty
+    // The automatic camera adjustment feature has been disabled
+    return;
   }
   
   // Helper method for easing animation
@@ -328,20 +419,33 @@ window.Game = class Game {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x01020A); // Darker blue-black background
     
-    // Create camera - use orthographic for 2D view
+    // Create camera - using perspective camera for 3D view
     const aspectRatio = window.innerWidth / window.innerHeight;
-    const frustumSize = 60;
-    this.camera = new THREE.OrthographicCamera(
-      frustumSize * aspectRatio / -2,
-      frustumSize * aspectRatio / 2,
-      frustumSize / 2,
-      frustumSize / -2,
+    const fov = 40; // Slightly narrower field of view for less distortion
+    this.camera = new THREE.PerspectiveCamera(
+      fov,
+      aspectRatio,
       0.1,
       1000
     );
-    // Start camera a bit closer to allow room for zooming out
-    this.camera.position.z = 80;
+    // Position camera to get a similar view as original orthographic camera
+    this.camera.position.z = 90; // Moved back slightly for better view
     this.camera.lookAt(0, 0, 0);
+    
+    // Initialize camera controls with interaction system
+    // Fix typo: This.Canvas -> this.canvas
+    if (!this.interaction) {
+      this.interaction = new Interaction(this.canvas, {
+        panEnabled: true,
+        zoomEnabled: true,
+        panSpeed: 2.0,
+        zoomSpeed: 8.0
+      });
+      this.interaction.setCamera(this.camera);
+    } else {
+      // If interaction already exists, just update the camera
+      this.interaction.setCamera(this.camera);
+    }
     
     // Create renderer
     this.renderer = new THREE.WebGLRenderer({ 
@@ -482,15 +586,15 @@ window.Game = class Game {
   }
   
   createStarfield() {
-    // Create a black background plane
-    const backgroundGeometry = new THREE.PlaneGeometry(this.gameWidth * 2, this.gameHeight * 2);
+    // Create a black background plane at far distance
+    const backgroundGeometry = new THREE.PlaneGeometry(this.gameWidth * 4, this.gameHeight * 4);
     const backgroundMaterial = new THREE.MeshBasicMaterial({
       color: 0x01020A, // Darker blue-black
       transparent: false,
       depthWrite: false
     });
     const backgroundMesh = new THREE.Mesh(backgroundGeometry, backgroundMaterial);
-    backgroundMesh.position.z = -100;
+    backgroundMesh.position.z = -250; // Moved further back for better depth effect
     this.scene.add(backgroundMesh);
     backgroundMesh.layers.set(0); // Make sure it doesn't get bloom
 
@@ -500,14 +604,14 @@ window.Game = class Game {
   
   addSparseBrightStars() {
     const starsGroup = new THREE.Group();
-    const starCount = 150; // Increased from 50 to 150
+    const starCount = 150; // Reverted back to original count
     
     // Generate random stars (60% of total)
     const randomStarCount = Math.floor(starCount * 0.6);
     for (let i = 0; i < randomStarCount; i++) {
-      const x = (Math.random() - 0.5) * this.gameWidth * 1.8;
-      const y = (Math.random() - 0.5) * this.gameHeight * 1.8;
-      const size = Math.random() * 3 + 1; // Size between 1 and 4 pixels
+      const x = (Math.random() - 0.5) * this.gameWidth * 2.5; // Wider coverage
+      const y = (Math.random() - 0.5) * this.gameHeight * 2.5; // Wider coverage
+      const size = Math.random() * 2 + 0.5; // Smaller size between 0.5 and 2.5 pixels
       
       // Randomize brightness a bit more
       const brightness = Math.random() * 0.3 + 0.7; // 0.7 to 1.0
@@ -623,7 +727,7 @@ window.Game = class Game {
   createStarPoint(x, y, size, brightness = 1.0) {
     // Create a point sprite for the star
     const material = new THREE.PointsMaterial({
-      size: size,
+      size: size * 0.5, // Reduced size to make them more star-like
       map: this.getStarTexture(),
       transparent: true,
       opacity: brightness,
@@ -631,8 +735,11 @@ window.Game = class Game {
       blending: THREE.AdditiveBlending
     });
     
+    // Add random Z position for depth with perspective camera
+    const z = -80 - Math.random() * 150; // Random depth between -80 and -230
+    
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute([x, y, -50], 3));
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([x, y, z], 3));
     
     return new THREE.Points(geometry, material);
   }
@@ -662,8 +769,12 @@ window.Game = class Game {
   
   createBlackHole() {
     // Clean up any existing black hole first
-    if (this.blackHole && this.blackHole.mesh) {
-      this.scene.remove(this.blackHole.mesh);
+    if (this.blackHole) {
+      if (this.blackHole.group) {
+        this.scene.remove(this.blackHole.group);
+      } else if (this.blackHole.mesh) {
+        this.scene.remove(this.blackHole.mesh);
+      }
       this.blackHole = null;
     }
     
@@ -690,46 +801,54 @@ window.Game = class Game {
       this.createAbsorptionEffect(object.position);
     };
     
-    // Position the black hole at center initially
-    this.blackHole.position = new THREE.Vector3(0, 0, 0);
-    this.blackHole.mesh.position.copy(this.blackHole.position);
+    // Keep the x,y position at the center initially, but preserve the z position from BlackHole class
+    this.blackHole.position.x = 0;
+    this.blackHole.position.y = 0;
+    // z position is already set in the BlackHole constructor
     
-    // Ensure black hole is visible with proper 3D appearance
-    this.blackHole.mesh.scale.set(0.7, 0.7, 0.7); // Start much smaller (was 1,1,1)
+    // Add the black hole to the scene - use the group if available, otherwise use mesh
+    if (this.blackHole.group) {
+      this.blackHole.group.position.copy(this.blackHole.position);
+      this.scene.add(this.blackHole.group);
+    } else if (this.blackHole.mesh) {
+      this.blackHole.mesh.position.copy(this.blackHole.position);
+      this.scene.add(this.blackHole.mesh);
+    }
     
-    // Add the black hole to the scene
-    this.scene.add(this.blackHole.mesh);
+    // Log the black hole's position for debugging
+    console.log("Black hole created at position:", this.blackHole.position);
     
     // Set up lens effect - this is now using a fallback renderer
     this.setupLensEffect();
   }
   
   createAbsorptionEffect(position) {
-    // Create stretched geometries pointing toward black hole
+    // Create vector pointing from absorption position toward black hole
     const dirToBlackHole = new THREE.Vector3()
       .subVectors(this.blackHole.position, position)
       .normalize();
     
-    // Distance to black hole
+    // Distance to black hole in 3D space
     const distToBH = this.blackHole.position.distanceTo(position);
     
-    // Add shock wave effect when objects are absorbed
+    // Add shock wave effect at absorption position
     this.createShockWave(position);
     
-    // Create accretion disk brightening effect - much more subtle now
+    // Create accretion disk brightening effect at the black hole position
+    const actualRadius = this.blackHole.getRadius();
     const flashGeometry = new THREE.RingGeometry(
-      this.blackHole.getRadius() * 1.2,
-      this.blackHole.getRadius() * 2,
+      actualRadius * 1.2,
+      actualRadius * 2,
       32, 
       2
     );
     
-    // Material that brightens the accretion disk - with less yellow, more blue/white
+    // Material that brightens the accretion disk
     const flashMaterial = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        intensity: { value: 0.2 }, // Significantly reduced intensity
-        color: { value: new THREE.Color(0x8080BB) } // Changed to a subtle blue-gray
+        intensity: { value: 0.2 },
+        color: { value: new THREE.Color(0x8080BB) }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -770,17 +889,26 @@ window.Game = class Game {
     });
     
     const diskFlash = new THREE.Mesh(flashGeometry, flashMaterial);
+    // Position at black hole center
     diskFlash.position.copy(this.blackHole.position);
-    diskFlash.position.z = 0.2;
+    // Offset slightly to be visible above the black hole
+    diskFlash.position.z += 0.2;
+    // Align with camera rotation
+    diskFlash.lookAt(this.camera.position);
     this.scene.add(diskFlash);
     
-    // Create light spikes coming out of the black hole perpendicular to the accretion disk
-    // These represent relativistic jets often seen in real black holes - made more subtle
-    const jetGeometry = new THREE.ConeGeometry(0.3, distToBH * 0.2, 16, 1, true);
+    // Calculate jet direction perpendicular to both camera view and direction to black hole
+    // This ensures jets are always visible from the camera perspective
+    const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    const jetDirection = new THREE.Vector3().crossVectors(cameraDirection, dirToBlackHole).normalize();
+    
+    // Create light spikes perpendicular to view direction
+    const jetLength = actualRadius * 4;
+    const jetGeometry = new THREE.ConeGeometry(actualRadius * 0.2, jetLength, 16, 1, true);
     const jetMaterial = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        color: { value: new THREE.Color(0x5050AA) } // Less bright blue
+        color: { value: new THREE.Color(0x5050AA) }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -814,14 +942,14 @@ window.Game = class Game {
     // Create two jets pointing in opposite directions
     const jet1 = new THREE.Mesh(jetGeometry, jetMaterial.clone());
     jet1.position.copy(this.blackHole.position);
-    jet1.rotation.z = Math.PI/2;
-    jet1.scale.set(1, 1 + Math.random(), 1);
+    // Use the quaternion to align with the calculated jet direction
+    jet1.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), jetDirection);
     this.scene.add(jet1);
     
     const jet2 = new THREE.Mesh(jetGeometry, jetMaterial.clone());
     jet2.position.copy(this.blackHole.position);
-    jet2.rotation.z = -Math.PI/2;
-    jet2.scale.set(1, 1 + Math.random(), 1);
+    // Point in the opposite direction
+    jet2.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), jetDirection.clone().negate());
     this.scene.add(jet2);
     
     // Animate everything
@@ -860,9 +988,12 @@ window.Game = class Game {
       jet2.scale.x = jetWidthFactor;
       jet2.scale.z = jetWidthFactor;
       
+      // Keep flash ring aligned with camera as it animates
+      diskFlash.lookAt(this.camera.position);
+      
       // Fade out jets
-      jet1.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity and fade quicker
-      jet2.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity and fade quicker
+      jet1.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity
+      jet2.material.opacity = Math.max(0, 0.5 - elapsed * 0.5);
       
       if (elapsed < 1.5) { // Shorter duration
         requestAnimationFrame(animateEffect);
@@ -879,18 +1010,18 @@ window.Game = class Game {
   
   // Add a new method for creating the shockwave effect
   createShockWave(position) {
-    // Create shockwave ring geometry - even smaller now
-    const radius = 1.2;
+    // Create shockwave ring geometry scaled to black hole size
+    const actualRadius = this.blackHole.getRadius();
+    const radius = actualRadius * 1.2;
     const segments = 32;
     const geometry = new THREE.RingGeometry(radius * 0.9, radius, segments);
     
-    // Create shockwave material with custom shader - more subtle
+    // Create shockwave material with custom shader
     const material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        color: { value: new THREE.Color(0xDDDDDD) }, // Less bright white
-        intensity: { value: 0.3 }, // Further reduced intensity
-        center: { value: new THREE.Vector2(0, 0) }
+        color: { value: new THREE.Color(0xDDDDDD) },
+        intensity: { value: 0.3 }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -909,7 +1040,7 @@ window.Game = class Game {
         varying vec2 vUv;
         
         void main() {
-          // Create a pulse effect - more subtle
+          // Create a pulse effect
           float alpha = sin(time * 8.0) * 0.2 + 0.5;
           alpha *= smoothstep(1.0, 0.6, time); // Fade out over time
           
@@ -928,16 +1059,24 @@ window.Game = class Game {
     // Create mesh
     const shockwave = new THREE.Mesh(geometry, material);
     shockwave.position.copy(position);
-    shockwave.position.z = 0.1; // Just above the scene plane but below post-processing
-    shockwave.rotation.z = Math.random() * Math.PI * 2; // Random rotation for variety
+    
+    // Offset slightly from the absorption position to be visible
+    shockwave.position.z += 0.1;
+    
+    // Calculate the normal that points toward the camera
+    const toCamera = new THREE.Vector3().subVectors(this.camera.position, position).normalize();
+    
+    // Orient the shockwave to face the camera
+    const upVector = new THREE.Vector3(0, 1, 0);
+    shockwave.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), toCamera);
     
     // Add to scene
     this.scene.add(shockwave);
     
-    // Animate the shockwave - shorter and smaller
+    // Animate the shockwave with dynamic scaling based on black hole size
     const startTime = performance.now();
-    const duration = 0.6; // Even shorter duration
-    const maxScale = 6; // Smaller max scale
+    const duration = 0.6; // Short duration
+    const maxScale = 6 + (this.blackHole.mass * 0.5); // Scale based on black hole mass
     
     const updateShockwave = () => {
       const elapsedTime = (performance.now() - startTime) / 1000;
@@ -957,9 +1096,12 @@ window.Game = class Game {
       const scale = 1 + easeOutProgress * maxScale;
       shockwave.scale.set(scale, scale, 1);
       
+      // Keep oriented toward camera during animation
+      shockwave.lookAt(this.camera.position);
+      
       // Update shader uniforms - fade faster
       material.uniforms.time.value = progress;
-      material.uniforms.intensity.value = 0.3 * (1 - easeOutProgress); // Start lower and fade out
+      material.uniforms.intensity.value = 0.3 * (1 - easeOutProgress);
       
       // Request next frame
       requestAnimationFrame(updateShockwave);
@@ -970,11 +1112,54 @@ window.Game = class Game {
   }
   
   generateObjects() {
-    // Generate celestial objects in 2D plane
+    // Generate celestial objects in 3D space with subtle depth
     this.celestialObjects = [];
     
-    // Number of objects to generate - increased for a fuller game field
-    const objectCount = 70;
+    // Number of objects to generate - reduced to make room for galaxy clusters
+    const objectCount = 40;
+    
+    // Number of galaxy clusters to create
+    const clusterCount = 3;
+    this.galaxyClusters = [];
+    
+    // Generate galaxy clusters first
+    for (let i = 0; i < clusterCount; i++) {
+      // Position clusters further from center to avoid instant absorption
+      const clusterDistance = 30 + Math.random() * 25; // Minimum distance from center
+      const angle = Math.random() * Math.PI * 2;
+      const clusterX = Math.cos(angle) * clusterDistance;
+      const clusterY = Math.sin(angle) * clusterDistance;
+      const clusterZ = (Math.random() - 0.5) * 10; // Small z variation
+      
+      // Create random cluster type and size
+      const clusterTypes = ['standard', 'binary', 'dense', 'sparse'];
+      const clusterSizes = ['small', 'medium', 'large'];
+      const clusterType = clusterTypes[Math.floor(Math.random() * clusterTypes.length)];
+      const clusterSize = clusterSizes[Math.floor(Math.random() * clusterSizes.length)];
+      
+      // Create cluster
+      const cluster = new GalaxyCluster({
+        position: new THREE.Vector3(clusterX, clusterY, clusterZ),
+        type: clusterType,
+        size: clusterSize,
+        scene: this.scene
+      });
+      
+      // Add all objects from the cluster to the game
+      const clusterObjects = cluster.getAllObjects();
+      for (const obj of clusterObjects) {
+        // Add to game object list
+        this.celestialObjects.push(obj);
+        
+        // Add to scene if not already added
+        if (!obj.mesh.parent) {
+          this.scene.add(obj.mesh);
+        }
+      }
+      
+      // Store the cluster
+      this.galaxyClusters.push(cluster);
+    }
     
     for (let i = 0; i < objectCount; i++) {
       // Determine object type based on probabilities
@@ -1016,8 +1201,11 @@ window.Game = class Game {
       });
       
       // Position randomly but avoid the center where the black hole starts
-      let x, y;
+      let x, y, z;
       let distance;
+      
+      // Add enhanced z variation for stronger 3D effect (-20 to 20)
+      z = (Math.random() - 0.5) * 40;
       
       // Create a better distribution of objects across the play area
       const distributionMethod = Math.random();
@@ -1035,6 +1223,11 @@ window.Game = class Game {
         const angle = Math.random() * Math.PI * 2;
         x = Math.cos(angle) * ringRadius;
         y = Math.sin(angle) * ringRadius;
+        
+        // Add stronger z variation for 3D orbital plane tilt
+        const ringTilt = Math.random() * 0.4; // Increased tilt factor
+        z = Math.sin(angle) * ringRadius * ringTilt;
+        
         distance = ringRadius;
       } else {
         // Position at the edges (for objects coming into the scene)
@@ -1060,7 +1253,7 @@ window.Game = class Game {
         distance = Math.sqrt(x*x + y*y);
       }
       
-      object.position.set(x, y, 0);
+      object.position.set(x, y, z || 0);
       object.mesh.position.copy(object.position);
       
       // Add more varied velocity for orbital motion
@@ -1084,7 +1277,11 @@ window.Game = class Game {
       const radialDx = Math.cos(angle) * radialComponent;
       const radialDy = Math.sin(angle) * radialComponent;
       
-      object.velocity = new THREE.Vector3(dx + radialDx, dy + radialDy, 0);
+      // Add more significant z-component for noticeable vertical movement
+      // Larger range for more visible 3D effect
+      const dz = (Math.random() - 0.5) * 0.5;
+      
+      object.velocity = new THREE.Vector3(dx + radialDx, dy + radialDy, dz);
       
       // Add to game
       this.celestialObjects.push(object);
@@ -1173,9 +1370,16 @@ window.Game = class Game {
     // Clear the array
     this.celestialObjects = [];
     
+    // Clear galaxy clusters array
+    if (this.galaxyClusters) {
+      this.galaxyClusters = [];
+    }
+    
     // Remove black hole
     if (this.blackHole) {
-      if (this.blackHole.mesh) {
+      if (this.blackHole.group) {
+        this.scene.remove(this.blackHole.group);
+      } else if (this.blackHole.mesh) {
         this.scene.remove(this.blackHole.mesh);
       }
       this.blackHole = null;
@@ -1211,6 +1415,11 @@ window.Game = class Game {
     
     // Update camera animation if active
     this.updateCameraAnimation(deltaTime);
+    
+    // Update alignment indicator if it exists
+    if (this.updateAlignmentIndicator) {
+      this.updateAlignmentIndicator(deltaTime);
+    }
     
     // If we're using the basic renderer, update it
     if (this.basicRendererActive && this.updateBasicRenderer) {
@@ -1281,6 +1490,14 @@ window.Game = class Game {
       // Update black hole (this will check for absorptions)
       this.blackHole.update(deltaTime, this.celestialObjects);
       
+      // Update galaxy clusters if they exist
+      if (this.galaxyClusters && this.galaxyClusters.length > 0) {
+        for (let i = 0; i < this.galaxyClusters.length; i++) {
+          // We don't need to update the cluster objects' physics here as they're already in the celestialObjects array
+          // Just update any cluster-specific properties if needed in future
+        }
+      }
+      
       // Update celestial objects
       for (let i = this.celestialObjects.length - 1; i >= 0; i--) {
         const object = this.celestialObjects[i];
@@ -1310,7 +1527,7 @@ window.Game = class Game {
         }
         
         // Update object position based on gravitational pull
-        object.update(deltaTime, this.blackHole);
+        object.update(deltaTime, this.blackHole, this.celestialObjects);
         
         // Update trajectory line if it exists
         if (object.trajectoryLine && !object.isAbsorbed && this.blackHole) {
@@ -1339,6 +1556,41 @@ window.Game = class Game {
       // Periodically add some objects to maintain visual interest, even if we're above the threshold
       if (this.frameCount % 300 === 0) {
         this.addMoreCelestialObjects(3);
+        
+        // Occasionally add a new galaxy cluster
+        if (Math.random() < 0.3 && (!this.galaxyClusters || this.galaxyClusters.length < 3)) {
+          // Position cluster at a random edge
+          const clusterDistance = Math.max(this.gameWidth, this.gameHeight) * 0.4;
+          const angle = Math.random() * Math.PI * 2;
+          const clusterX = Math.cos(angle) * clusterDistance;
+          const clusterY = Math.sin(angle) * clusterDistance;
+          
+          // Create random cluster
+          const clusterTypes = ['standard', 'binary', 'dense', 'sparse'];
+          const clusterSizes = ['small', 'medium'];
+          const clusterType = clusterTypes[Math.floor(Math.random() * clusterTypes.length)];
+          const clusterSize = clusterSizes[Math.floor(Math.random() * clusterSizes.length)];
+          
+          const cluster = new GalaxyCluster({
+            position: new THREE.Vector3(clusterX, clusterY, 0),
+            type: clusterType,
+            size: clusterSize,
+            scene: this.scene
+          });
+          
+          // Add objects to game
+          const clusterObjects = cluster.getAllObjects();
+          for (const obj of clusterObjects) {
+            this.celestialObjects.push(obj);
+            if (!obj.mesh.parent) {
+              this.scene.add(obj.mesh);
+            }
+          }
+          
+          // Store the cluster
+          if (!this.galaxyClusters) this.galaxyClusters = [];
+          this.galaxyClusters.push(cluster);
+        }
       }
     }
     
@@ -1354,7 +1606,8 @@ window.Game = class Game {
       let type, mass, color;
       const rand = Math.random();
       
-      if (rand < 0.6) {
+      // Changed probabilities to ensure more stars
+      if (rand < 0.4) {
         // Star
         type = 'star';
         mass = Math.random() * 4 + 1; // 1-5 mass units
@@ -1388,11 +1641,65 @@ window.Game = class Game {
         showTrajectory: false // Disable all trajectories
       });
       
-      // Improved positioning strategy for new objects
+      // For planets, check if we should assign them to stars
+      if (type === 'planet' && Math.random() < 0.7) { // 70% chance of creating an orbiting planet
+        // Find a suitable star to orbit around
+        const stars = this.celestialObjects.filter(obj => 
+          obj.type === 'star' && 
+          obj.parent === null && // Only use stars that aren't already orbiting something
+          obj.position.distanceTo(this.blackHole.position) > this.blackHole.getRadius() * 8 // Only stars far enough from the black hole
+        );
+        
+        if (stars.length > 0) {
+          // Choose a random star
+          const parentStar = stars[Math.floor(Math.random() * stars.length)];
+          
+          // Set the parent and calculate orbit
+          object.parent = parentStar;
+          
+          // Random orbit distance from the star (scaled by star mass)
+          const orbitDistance = (1.5 + Math.random() * 2) * parentStar.getRadius() * 3;
+          
+          // Random initial angle
+          const angle = Math.random() * Math.PI * 2;
+          
+          // Position the planet in orbit around the star
+          object.position.set(
+            parentStar.position.x + Math.cos(angle) * orbitDistance,
+            parentStar.position.y + Math.sin(angle) * orbitDistance,
+            parentStar.position.z + (Math.random() - 0.5) * 2 // Small z-variation
+          );
+          
+          // Calculate orbital velocity based on parent star's mass
+          const orbitSpeed = Math.sqrt(0.3 * parentStar.mass / orbitDistance);
+          
+          // Set velocity perpendicular to the radius vector for circular orbit
+          const perpAngle = angle + Math.PI / 2;
+          object.velocity = new THREE.Vector3(
+            Math.cos(perpAngle) * orbitSpeed,
+            Math.sin(perpAngle) * orbitSpeed,
+            (Math.random() - 0.5) * 0.1 // Small z-component
+          );
+          
+          // Set mesh position
+          object.mesh.position.copy(object.position);
+          
+          // Add to game
+          this.celestialObjects.push(object);
+          this.scene.add(object.mesh);
+          
+          continue; // Skip the normal positioning code below
+        }
+      }
+      
+      // Standard positioning for non-orbiting objects
       // Position randomly on the edges with more variation
       const side = Math.floor(Math.random() * 4); // 0: top, 1: right, 2: bottom, 3: left
       const distanceVariation = 0.2; // Allow objects to appear deeper into the play area
-      let x, y;
+      let x, y, z;
+      
+      // Add enhanced z-depth for more pronounced 3D effect (-20 to 20)
+      z = (Math.random() - 0.5) * 40;
       
       switch (side) {
         case 0: // top
@@ -1413,7 +1720,7 @@ window.Game = class Game {
           break;
       }
       
-      object.position.set(x, y, 0);
+      object.position.set(x, y, z);
       object.mesh.position.copy(object.position);
       
       // More varied velocity for objects
@@ -1426,7 +1733,11 @@ window.Game = class Game {
       const dx = Math.cos(centerAngle + angleVariation) * speed;
       const dy = Math.sin(centerAngle + angleVariation) * speed;
       
-      object.velocity = new THREE.Vector3(dx, dy, 0);
+      // Add more significant z velocity component for noticeable 3D movement
+      // Increased magnitude for more visible effect
+      const dz = (Math.random() - 0.5) * 0.3;
+      
+      object.velocity = new THREE.Vector3(dx, dy, dz);
       
       // Add small perpendicular velocity for more orbital trajectories
       if (Math.random() < 0.7) { // 70% chance for orbital component
@@ -1444,12 +1755,9 @@ window.Game = class Game {
   
   onWindowResize() {
     const aspectRatio = window.innerWidth / window.innerHeight;
-    const frustumSize = 60;
     
-    this.camera.left = frustumSize * aspectRatio / -2;
-    this.camera.right = frustumSize * aspectRatio / 2;
-    this.camera.top = frustumSize / 2;
-    this.camera.bottom = frustumSize / -2;
+    // Update for perspective camera
+    this.camera.aspect = aspectRatio;
     
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1484,7 +1792,16 @@ window.Game = class Game {
       console.log(`Frame: ${this.frameCount}, Objects: ${this.celestialObjects.length}, BlackHole: ${this.blackHole?.mass.toFixed(2)}`);
     }
     
-    // Update game logic
+    // 1. First update camera controls via interaction system
+    // This should happen before any game logic updates
+    if (this.interaction) {
+      this.interaction.update(deltaTime);
+    }
+    
+    // 2. Call the empty updateCameraAnimation function (disabled but maintained for reference consistency)
+    this.updateCameraAnimation(deltaTime);
+    
+    // 3. Then update gameplay elements
     this.update(deltaTime);
     
     // CRITICAL: Simplified rendering logic to ensure we see something
@@ -1530,10 +1847,21 @@ window.Game = class Game {
     this.basicRendererActive = true;
     
     // Ensure we can see the black hole even without post-processing
-    if (this.blackHole && this.blackHole.mesh) {
+    if (this.blackHole) {
       console.log("Setting up basic black hole visualization");
       
-      // Check if material exists before trying to set opacity
+      // First clean up any existing effects that might be in the scene
+      if (this.blackHoleGlow && this.scene.children.includes(this.blackHoleGlow)) {
+        this.scene.remove(this.blackHoleGlow);
+        this.blackHoleGlow = null;
+      }
+      
+      if (this.accretionDisk && this.scene.children.includes(this.accretionDisk)) {
+        this.scene.remove(this.accretionDisk);
+        this.accretionDisk = null;
+      }
+      
+      // Check if event horizon exists and has material
       if (this.blackHole.eventHorizon && this.blackHole.eventHorizon.material) {
         // Make sure the black hole's event horizon is visible but still partially transparent
         this.blackHole.eventHorizon.material.opacity = 0.85;
@@ -1541,25 +1869,37 @@ window.Game = class Game {
       
       // Create a simple glow effect if it doesn't exist yet
       if (!this.blackHoleGlow) {
-        const glowGeometry = new THREE.SphereGeometry(this.blackHole.getRadius() * 3, 32, 32);
+        // Create glow that's attached to the black hole group
+        const glowGeometry = new THREE.SphereGeometry(this.blackHole.getRadius() * 2.8, 32, 32);
         const glowMaterial = new THREE.MeshBasicMaterial({
-          color: 0x220044,
+          color: 0x220066, // More vibrant purple
           transparent: true,
-          opacity: 0.3,
-          side: THREE.BackSide
+          opacity: 0.4,
+          side: THREE.BackSide,
+          depthWrite: false // Important for proper blending
         });
         
         this.blackHoleGlow = new THREE.Mesh(glowGeometry, glowMaterial);
-        this.blackHoleGlow.position.copy(this.blackHole.position);
-        this.scene.add(this.blackHoleGlow);
-        console.log("Added blackhole glow effect");
+        
+        // Always add to the group for proper transform inheritance
+        if (this.blackHole.group) {
+          // Add with zero local position since group already has the proper position
+          this.blackHoleGlow.position.set(0, 0, 0);
+          this.blackHole.group.add(this.blackHoleGlow);
+          console.log("Added blackhole glow effect to black hole group");
+        } else {
+          // Fallback to scene placement if no group exists
+          this.blackHoleGlow.position.copy(this.blackHole.position);
+          this.scene.add(this.blackHoleGlow);
+          console.log("Added blackhole glow effect to scene");
+        }
       }
       
       // Create accretion disk with better shader for lens effect integration
       const diskGeometry = new THREE.RingGeometry(
-        this.blackHole.getRadius() * 2.2,
-        this.blackHole.getRadius() * 4,
-        32, 
+        this.blackHole.getRadius() * 2.1,
+        this.blackHole.getRadius() * 3.2,
+        48, 
         2
       );
       
@@ -1568,8 +1908,8 @@ window.Game = class Game {
         uniforms: {
           time: { value: 0 },
           radius: { value: this.blackHole.getRadius() },
-          color: { value: new THREE.Color(0x304060) }, // Subtle blue
-          opacity: { value: 0.4 }
+          color: { value: new THREE.Color(0x304080) }, // More vibrant blue
+          opacity: { value: 0.5 }
         },
         vertexShader: `
           varying vec2 vUv;
@@ -1617,30 +1957,45 @@ window.Game = class Game {
       });
       
       this.accretionDisk = new THREE.Mesh(diskGeometry, diskMaterial);
-      this.accretionDisk.position.copy(this.blackHole.position);
-      this.accretionDisk.rotation.x = Math.PI / 2;
-      this.scene.add(this.accretionDisk);
-      console.log("Added accretion disk with shader material");
+      
+      // Always add to the group for proper transform inheritance
+      if (this.blackHole.group) {
+        // Set the rotation before adding to the group
+        this.accretionDisk.rotation.x = Math.PI / 2;
+        this.accretionDisk.position.set(0, 0, 0); // Local position is zero
+        this.blackHole.group.add(this.accretionDisk);
+        console.log("Added accretion disk to black hole group");
+      } else {
+        // Fallback to scene placement if no group exists
+        this.accretionDisk.position.copy(this.blackHole.position);
+        this.accretionDisk.rotation.x = Math.PI / 2;
+        this.scene.add(this.accretionDisk);
+        console.log("Added accretion disk to scene");
+      }
       
       // Adding a simple update function for the glow and disk
       this.updateBasicRenderer = (deltaTime) => {
         const time = performance.now() * 0.001; // Current time in seconds
         
-        if (this.blackHoleGlow) {
+        // Only need to maintain manual positioning if objects aren't in the group
+        if (this.blackHoleGlow && !this.blackHole.group.children.includes(this.blackHoleGlow)) {
           this.blackHoleGlow.position.copy(this.blackHole.position);
-          this.blackHoleGlow.scale.set(
-            1.0 + this.blackHole.mass * 0.1,
-            1.0 + this.blackHole.mass * 0.1,
-            1.0 + this.blackHole.mass * 0.1
-          );
+          // Scale with mass for visual growth
+          const glowScale = 1.0 + this.blackHole.mass * 0.1;
+          this.blackHoleGlow.scale.set(glowScale, glowScale, glowScale);
         }
         
-        if (this.accretionDisk) {
+        // Only need to maintain manual positioning if objects aren't in the group
+        if (this.accretionDisk && !this.blackHole.group.children.includes(this.accretionDisk)) {
           this.accretionDisk.position.copy(this.blackHole.position);
+        }
+        
+        // Always update rotation for spinning effect, regardless of parent
+        if (this.accretionDisk) {
           this.accretionDisk.rotation.z += deltaTime * 0.2;
           
           // Update time in the shader
-          if (this.accretionDisk.material.uniforms) {
+          if (this.accretionDisk.material && this.accretionDisk.material.uniforms) {
             this.accretionDisk.material.uniforms.time.value = time;
           }
         }

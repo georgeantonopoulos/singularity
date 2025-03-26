@@ -109,13 +109,13 @@ export class BlackHoleLensEffect {
               float fade = smoothstep(visualRadius * 0.8, visualRadius, dist);
               gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0 - fade);
               return;
-            } else if (dist < visualRadius * 2.5) {
-              // Gravitational lensing zone - limited to a smaller radius around the black hole
+            } else if (dist < visualRadius * 8.0) {
+              // Gravitational lensing zone - matched to outer blue glow circle
               // Higher power for more dramatic effect near the event horizon
               deflectionFactor = intensity * pow(visualRadius / dist, 1.8) * 1.5;
               
-              // Taper off effect at the outer edge
-              deflectionFactor *= smoothstep(visualRadius * 2.5, visualRadius, dist);
+              // Taper off effect at the outer edge - aligned with blue glow
+              deflectionFactor *= smoothstep(visualRadius * 8.0, visualRadius * 4.0, dist);
             } else {
               // Outside the lensing effect zone
               gl_FragColor = texture2D(tDiffuse, uv);
@@ -136,10 +136,10 @@ export class BlackHoleLensEffect {
             
             // Apply distortion: redirect rays toward the black hole center
             // The closer to the black hole, the stronger the bending
-            vec2 offset = dir * deflectionFactor;
+            vec2 offset = dir * deflectionFactor * 2.5; // Increased base distortion strength
             
             // Enhanced distortion near Einstein ring
-            offset += dir * ringFactor * deflectionFactor * 0.5;
+            offset += dir * ringFactor * deflectionFactor * 2.0; // Increased ring distortion
             
             // Sample the scene texture with the distorted coordinates
             vec2 distortedUv = uv - offset;
@@ -154,8 +154,8 @@ export class BlackHoleLensEffect {
               color.r = mix(color.r, color.r * 0.9, blueShift * 0.2);
             }
             
-            // Brighten the Einstein ring more noticeably
-            color.rgb += vec3(0.15, 0.15, 0.35) * ringFactor * intensity * 0.5;
+            // Dramatically enhance the Einstein ring
+            color.rgb += vec3(1.0, 0.8, 0.6) * ringFactor * intensity * 2.0; // Much brighter, warmer ring
             
             gl_FragColor = color;
           }
@@ -269,42 +269,42 @@ export class BlackHoleLensEffect {
         return;
       }
 
-      // Calculate Schwarzschild radius from mass
-      // rs = 2GM/c^2 but we're using a simplified formula for the visualization
-      const schwarzschildRadius = blackHoleMass * 0.1; // Scale down for visual purposes
+      // Calculate Schwarzschild radius with enhanced scaling
+      let schwarzschildRadius = blackHoleMass * 0.15; // Increased base scale
       
-      // Ensure positions are valid numbers before updating uniforms
+      if (camera && this.blackHole) {
+        const cameraDistance = camera.position.distanceTo(this.blackHole.position);
+        const referenceDistance = 90;
+        
+        // Enhanced distance scaling for more dramatic effect
+        const distanceScale = Math.pow(referenceDistance / Math.max(cameraDistance, 1), 1.2);
+        schwarzschildRadius *= distanceScale;
+      }
+      
       if (isNaN(blackHolePosition.x) || isNaN(blackHolePosition.y)) {
         console.warn("Invalid black hole position received:", blackHolePosition);
         return;
       }
       
-      // Log position for debugging - then remove these logs in final version
-      // console.log("Updating lens with position:", blackHolePosition.x, blackHolePosition.y);
-      
-      // Update our shader uniforms with current black hole parameters
-      // Convert from screen coordinates to normalized (0-1) coordinates
       this.lensPass.uniforms.blackHolePosition.value.set(
         blackHolePosition.x / window.innerWidth,
-        1.0 - (blackHolePosition.y / window.innerHeight) // Flip Y coordinate for WebGL
+        1.0 - (blackHolePosition.y / window.innerHeight)
       );
       
-      // Update mass and radius in the shader - scale properly to prevent overly large effects
-      this.lensPass.uniforms.blackHoleMass.value = Math.min(blackHoleMass, 50); // Cap the visual effect for very large masses
+      // Enhanced mass effect scaling
+      this.lensPass.uniforms.blackHoleMass.value = Math.min(blackHoleMass * 1.5, 75);
       
       if (this.lensPass.uniforms.schwarzschildRadius) {
         this.lensPass.uniforms.schwarzschildRadius.value = schwarzschildRadius;
       }
       
-      // Set the effect intensity based on the black hole's size but keep it constrained
-      this.lensPass.uniforms.intensity.value = Math.min(0.8 + (blackHoleMass * 0.05), 2.0);
+      // Increased base intensity for stronger visual effect
+      this.lensPass.uniforms.intensity.value = Math.min(1.0 + (blackHoleMass * 0.08), 2.5);
       
-      // Update time for animated effects
       if (this.lensPass.uniforms.time) {
-        this.lensPass.uniforms.time.value += 0.016; // Assume ~60fps
+        this.lensPass.uniforms.time.value += 0.016;
       }
       
-      // Keep the screen ratio updated in case of window resize
       if (this.lensPass.uniforms.screenRatio) {
         this.lensPass.uniforms.screenRatio.value = window.innerWidth / window.innerHeight;
       }
@@ -343,8 +343,8 @@ export class BlackHoleLensEffect {
           // Get the black hole's screen position for the lens effect
           const screenPosition = this.blackHole.getScreenPosition(this.camera);
           
-          // Log the position to help debug
-          console.log("Black hole screen position:", screenPosition);
+          // Get additional lens properties
+          const lensProps = this.blackHole.getLensEffectProperties();
           
           // Call the updated lens effect with position, mass, and camera
           this.update(screenPosition, this.blackHole.mass, this.camera);
@@ -356,16 +356,12 @@ export class BlackHoleLensEffect {
       
       // Use the composer for rendering with post-processing
       try {
-        // Log render attempt
-        console.log("Rendering with EffectComposer");
         this.composer.render();
-        console.log("EffectComposer render complete");
       } catch (composerError) {
         console.error("EffectComposer render failed:", composerError);
         this.fallbackActive = true;
         this.renderer.render(this.scene, this.camera);
       }
-      
     } catch (renderError) {
       console.error('Error in lens effect render:', renderError);
       this.fallbackActive = true;
@@ -375,14 +371,6 @@ export class BlackHoleLensEffect {
         this.renderer.render(this.scene, this.camera);
       } catch (fallbackError) {
         console.error('Critical error: Even fallback rendering failed:', fallbackError);
-        // Log WebGL info to help diagnose the issue
-        const gl = this.renderer.getContext();
-        console.error('WebGL context info:', {
-          contextLost: gl.isContextLost ? gl.isContextLost() : 'unknown',
-          renderer: gl.getParameter ? gl.getParameter(gl.RENDERER) : 'unknown',
-          vendor: gl.getParameter ? gl.getParameter(gl.VENDOR) : 'unknown',
-          extensions: gl.getSupportedExtensions ? gl.getSupportedExtensions() : 'unknown'
-        });
       }
     }
   }
