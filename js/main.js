@@ -823,31 +823,32 @@ window.Game = class Game {
   }
   
   createAbsorptionEffect(position) {
-    // Create stretched geometries pointing toward black hole
+    // Create vector pointing from absorption position toward black hole
     const dirToBlackHole = new THREE.Vector3()
       .subVectors(this.blackHole.position, position)
       .normalize();
     
-    // Distance to black hole
+    // Distance to black hole in 3D space
     const distToBH = this.blackHole.position.distanceTo(position);
     
-    // Add shock wave effect when objects are absorbed
+    // Add shock wave effect at absorption position
     this.createShockWave(position);
     
-    // Create accretion disk brightening effect - much more subtle now
+    // Create accretion disk brightening effect at the black hole position
+    const actualRadius = this.blackHole.getRadius();
     const flashGeometry = new THREE.RingGeometry(
-      this.blackHole.getRadius() * 1.2,
-      this.blackHole.getRadius() * 2,
+      actualRadius * 1.2,
+      actualRadius * 2,
       32, 
       2
     );
     
-    // Material that brightens the accretion disk - with less yellow, more blue/white
+    // Material that brightens the accretion disk
     const flashMaterial = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        intensity: { value: 0.2 }, // Significantly reduced intensity
-        color: { value: new THREE.Color(0x8080BB) } // Changed to a subtle blue-gray
+        intensity: { value: 0.2 },
+        color: { value: new THREE.Color(0x8080BB) }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -888,17 +889,26 @@ window.Game = class Game {
     });
     
     const diskFlash = new THREE.Mesh(flashGeometry, flashMaterial);
+    // Position at black hole center
     diskFlash.position.copy(this.blackHole.position);
-    diskFlash.position.z = 0.2;
+    // Offset slightly to be visible above the black hole
+    diskFlash.position.z += 0.2;
+    // Align with camera rotation
+    diskFlash.lookAt(this.camera.position);
     this.scene.add(diskFlash);
     
-    // Create light spikes coming out of the black hole perpendicular to the accretion disk
-    // These represent relativistic jets often seen in real black holes - made more subtle
-    const jetGeometry = new THREE.ConeGeometry(0.3, distToBH * 0.2, 16, 1, true);
+    // Calculate jet direction perpendicular to both camera view and direction to black hole
+    // This ensures jets are always visible from the camera perspective
+    const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    const jetDirection = new THREE.Vector3().crossVectors(cameraDirection, dirToBlackHole).normalize();
+    
+    // Create light spikes perpendicular to view direction
+    const jetLength = actualRadius * 4;
+    const jetGeometry = new THREE.ConeGeometry(actualRadius * 0.2, jetLength, 16, 1, true);
     const jetMaterial = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        color: { value: new THREE.Color(0x5050AA) } // Less bright blue
+        color: { value: new THREE.Color(0x5050AA) }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -932,14 +942,14 @@ window.Game = class Game {
     // Create two jets pointing in opposite directions
     const jet1 = new THREE.Mesh(jetGeometry, jetMaterial.clone());
     jet1.position.copy(this.blackHole.position);
-    jet1.rotation.z = Math.PI/2;
-    jet1.scale.set(1, 1 + Math.random(), 1);
+    // Use the quaternion to align with the calculated jet direction
+    jet1.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), jetDirection);
     this.scene.add(jet1);
     
     const jet2 = new THREE.Mesh(jetGeometry, jetMaterial.clone());
     jet2.position.copy(this.blackHole.position);
-    jet2.rotation.z = -Math.PI/2;
-    jet2.scale.set(1, 1 + Math.random(), 1);
+    // Point in the opposite direction
+    jet2.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), jetDirection.clone().negate());
     this.scene.add(jet2);
     
     // Animate everything
@@ -978,9 +988,12 @@ window.Game = class Game {
       jet2.scale.x = jetWidthFactor;
       jet2.scale.z = jetWidthFactor;
       
+      // Keep flash ring aligned with camera as it animates
+      diskFlash.lookAt(this.camera.position);
+      
       // Fade out jets
-      jet1.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity and fade quicker
-      jet2.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity and fade quicker
+      jet1.material.opacity = Math.max(0, 0.5 - elapsed * 0.5); // Start at 50% opacity
+      jet2.material.opacity = Math.max(0, 0.5 - elapsed * 0.5);
       
       if (elapsed < 1.5) { // Shorter duration
         requestAnimationFrame(animateEffect);
@@ -997,18 +1010,18 @@ window.Game = class Game {
   
   // Add a new method for creating the shockwave effect
   createShockWave(position) {
-    // Create shockwave ring geometry - even smaller now
-    const radius = 1.2;
+    // Create shockwave ring geometry scaled to black hole size
+    const actualRadius = this.blackHole.getRadius();
+    const radius = actualRadius * 1.2;
     const segments = 32;
     const geometry = new THREE.RingGeometry(radius * 0.9, radius, segments);
     
-    // Create shockwave material with custom shader - more subtle
+    // Create shockwave material with custom shader
     const material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        color: { value: new THREE.Color(0xDDDDDD) }, // Less bright white
-        intensity: { value: 0.3 }, // Further reduced intensity
-        center: { value: new THREE.Vector2(0, 0) }
+        color: { value: new THREE.Color(0xDDDDDD) },
+        intensity: { value: 0.3 }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -1027,7 +1040,7 @@ window.Game = class Game {
         varying vec2 vUv;
         
         void main() {
-          // Create a pulse effect - more subtle
+          // Create a pulse effect
           float alpha = sin(time * 8.0) * 0.2 + 0.5;
           alpha *= smoothstep(1.0, 0.6, time); // Fade out over time
           
@@ -1046,16 +1059,24 @@ window.Game = class Game {
     // Create mesh
     const shockwave = new THREE.Mesh(geometry, material);
     shockwave.position.copy(position);
-    shockwave.position.z = 0.1; // Just above the scene plane but below post-processing
-    shockwave.rotation.z = Math.random() * Math.PI * 2; // Random rotation for variety
+    
+    // Offset slightly from the absorption position to be visible
+    shockwave.position.z += 0.1;
+    
+    // Calculate the normal that points toward the camera
+    const toCamera = new THREE.Vector3().subVectors(this.camera.position, position).normalize();
+    
+    // Orient the shockwave to face the camera
+    const upVector = new THREE.Vector3(0, 1, 0);
+    shockwave.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), toCamera);
     
     // Add to scene
     this.scene.add(shockwave);
     
-    // Animate the shockwave - shorter and smaller
+    // Animate the shockwave with dynamic scaling based on black hole size
     const startTime = performance.now();
-    const duration = 0.6; // Even shorter duration
-    const maxScale = 6; // Smaller max scale
+    const duration = 0.6; // Short duration
+    const maxScale = 6 + (this.blackHole.mass * 0.5); // Scale based on black hole mass
     
     const updateShockwave = () => {
       const elapsedTime = (performance.now() - startTime) / 1000;
@@ -1075,9 +1096,12 @@ window.Game = class Game {
       const scale = 1 + easeOutProgress * maxScale;
       shockwave.scale.set(scale, scale, 1);
       
+      // Keep oriented toward camera during animation
+      shockwave.lookAt(this.camera.position);
+      
       // Update shader uniforms - fade faster
       material.uniforms.time.value = progress;
-      material.uniforms.intensity.value = 0.3 * (1 - easeOutProgress); // Start lower and fade out
+      material.uniforms.intensity.value = 0.3 * (1 - easeOutProgress);
       
       // Request next frame
       requestAnimationFrame(updateShockwave);
