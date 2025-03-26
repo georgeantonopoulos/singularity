@@ -16,7 +16,7 @@ export class Interaction {
       zoomEnabled: true,
       panSpeed: 1.0,
       zoomSpeed: 5.0,
-      minZoom: 30,
+      minZoom: 15, // Decreased from 30 to allow more zoom out
       maxZoom: 150,
       easeOutStrength: 0.12, // Higher = faster easing
       ...options
@@ -49,6 +49,12 @@ export class Interaction {
     
     // Track touch positions
     this.touches = [];
+    
+    // For multi-touch gestures
+    this.lastTouchDistance = 0;
+    this.isMultiTouch = false;
+    this.touchPanStartX = 0;
+    this.touchPanStartY = 0;
     
     // Track keys
     this.keys = new Set();
@@ -359,7 +365,7 @@ export class Interaction {
     
     this.touches = Array.from(event.touches);
     
-    // Update mouse position for single touch
+    // Single touch - tracked for regular click/tap
     if (this.touches.length === 1) {
       const rect = this.canvas.getBoundingClientRect();
       this.mouse.x = this.touches[0].clientX - rect.left;
@@ -369,6 +375,32 @@ export class Interaction {
       // Calculate normalized coordinates
       this.normalizedMouse.x = (this.touches[0].clientX / window.innerWidth) * 2 - 1;
       this.normalizedMouse.y = -(this.touches[0].clientY / window.innerHeight) * 2 + 1;
+      
+      this.isMultiTouch = false;
+    } 
+    // Multi-touch handling for pinch zoom and two-finger pan
+    else if (this.touches.length === 2 && this.camera) {
+      this.isMultiTouch = true;
+      this.mouse.down = false; // Prevent treating as a regular tap
+      
+      // Store initial touch positions for pan calculation
+      const touch1 = this.touches[0];
+      const touch2 = this.touches[1];
+      
+      // Calculate midpoint for panning reference
+      this.touchPanStartX = (touch1.clientX + touch2.clientX) / 2;
+      this.touchPanStartY = (touch1.clientY + touch2.clientY) / 2;
+      
+      // Calculate initial distance for pinch zoom reference
+      this.lastTouchDistance = this.getTouchDistance(touch1, touch2);
+      
+      // Store camera start position for panning
+      this.cameraStartX = this.camera.position.x;
+      this.cameraStartY = this.camera.position.y;
+      
+      // Indicate we're starting a gesture
+      this.isPanning = true;
+      this.isZooming = true;
     }
   }
   
@@ -383,8 +415,8 @@ export class Interaction {
     
     this.touches = Array.from(event.touches);
     
-    // Update mouse position for single touch
-    if (this.touches.length === 1) {
+    // Single touch movement
+    if (this.touches.length === 1 && !this.isMultiTouch) {
       const rect = this.canvas.getBoundingClientRect();
       this.mouse.x = this.touches[0].clientX - rect.left;
       this.mouse.y = this.touches[0].clientY - rect.top;
@@ -395,6 +427,72 @@ export class Interaction {
       
       // Call registered move callbacks
       this.callbacks.move.forEach(callback => callback(this.mouse));
+    } 
+    // Multi-touch handling - implement pinch zoom and two-finger pan
+    else if (this.touches.length === 2 && this.camera) {
+      const touch1 = this.touches[0];
+      const touch2 = this.touches[1];
+      
+      // Calculate current touch midpoint
+      const currentMidX = (touch1.clientX + touch2.clientX) / 2;
+      const currentMidY = (touch1.clientY + touch2.clientY) / 2;
+      
+      // Calculate pan amount based on midpoint movement
+      if (this.options.panEnabled) {
+        const deltaX = (currentMidX - this.touchPanStartX) * this.options.panSpeed * 0.01;
+        const deltaY = (currentMidY - this.touchPanStartY) * this.options.panSpeed * 0.01;
+        
+        // Set target positions for panning
+        this.targetCameraX = this.cameraStartX - deltaX;
+        this.targetCameraY = this.cameraStartY + deltaY; // Invert Y for natural panning
+        
+        // Apply pan position directly for immediate feedback
+        this.camera.position.x = this.targetCameraX;
+        this.camera.position.y = this.targetCameraY;
+        
+        // Call pan callbacks
+        this.callbacks.pan.forEach(callback => callback({
+          deltaX: -deltaX,
+          deltaY: deltaY,
+          x: this.targetCameraX,
+          y: this.targetCameraY
+        }));
+      }
+      
+      // Calculate pinch-zoom
+      if (this.options.zoomEnabled) {
+        const currentDistance = this.getTouchDistance(touch1, touch2);
+        const distanceDelta = currentDistance - this.lastTouchDistance;
+        
+        // Only zoom if the distance changed significantly
+        if (Math.abs(distanceDelta) > 1) {
+          // Zoom direction: positive = zoom in, negative = zoom out
+          const zoomDirection = distanceDelta > 0 ? -1 : 1;
+          
+          // Scale zoom by distance for more natural feeling
+          const distanceFactor = Math.max(0.5, this.camera.position.z / 90);
+          const zoomAmount = zoomDirection * this.options.zoomSpeed * distanceFactor * 0.2;
+          
+          // Update target zoom with constraints
+          this.targetCameraZ = Math.max(
+            this.options.minZoom, 
+            Math.min(this.options.maxZoom, this.camera.position.z + zoomAmount)
+          );
+          
+          // Call zoom callbacks
+          this.callbacks.zoom.forEach(callback => callback({
+            delta: -zoomDirection,
+            targetZ: this.targetCameraZ
+          }));
+          
+          // Update last distance for next calculation
+          this.lastTouchDistance = currentDistance;
+        }
+      }
+      
+      // Update touch start position for relative panning in next move
+      this.touchPanStartX = currentMidX;
+      this.touchPanStartY = currentMidY;
     }
   }
   
@@ -403,14 +501,38 @@ export class Interaction {
    * @param {TouchEvent} event - Touch event
    */
   onTouchEnd(event) {
-    if (this.touches.length === 1 && event.touches.length === 0) {
+    // If we were in a multi-touch state and now reduced to 0 or 1 touch
+    if (this.isMultiTouch && event.touches.length < 2) {
+      this.isPanning = false;
+      this.isZooming = false;
+      
+      // Only set a timeout to reset the flag after a short delay
+      setTimeout(() => {
+        this.isMultiTouch = false;
+      }, 50); // Short delay to prevent accidental tap after gesture
+    }
+    
+    // Single touch end - might be a tap/click
+    if (this.touches.length === 1 && event.touches.length === 0 && !this.isMultiTouch) {
       this.mouse.down = false;
       
-      // Call click callbacks
+      // Call click callbacks if it was a single tap
       this.callbacks.click.forEach(callback => callback(this.mouse));
     }
     
     this.touches = Array.from(event.touches);
+  }
+  
+  /**
+   * Calculate distance between two touch points
+   * @param {Touch} touch1 - First touch point
+   * @param {Touch} touch2 - Second touch point
+   * @returns {number} Distance between touches
+   */
+  getTouchDistance(touch1, touch2) {
+    const dx = touch1.clientX - touch2.clientX;
+    const dy = touch1.clientY - touch2.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
   }
   
   /**
@@ -474,11 +596,13 @@ export class Interaction {
     }
     
     // Update camera look target to match panning
-    this.camera.lookAt(
-      this.camera.position.x,
-      this.camera.position.y,
-      0
-    );
+    if (this.camera.lookAt) {
+      this.camera.lookAt(
+        this.camera.position.x,
+        this.camera.position.y,
+        0
+      );
+    }
   }
   
   /**
